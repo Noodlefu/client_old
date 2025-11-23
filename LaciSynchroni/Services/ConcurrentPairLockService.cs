@@ -1,5 +1,6 @@
 using Dalamud.Utility;
 using System.Collections.Concurrent;
+using System.Linq;
 
 namespace LaciSynchroni.Services
 {
@@ -35,7 +36,10 @@ namespace LaciSynchroni.Services
 
         public ICollection<LockData> GetCurrentRenderLocks()
         {
-            return _renderLocks.Values;
+            lock (_resourceLock)
+            {
+                return _renderLocks.Values.ToList();
+            }
         }
 
         public record LockData(string CharName, PlayerNameHash PlayerHash, ServerIndex Index);

@@ -85,6 +85,17 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         });
         Mediator.Subscribe<PenumbraInitializedMessage>(this, (_) =>
         {
+            if (!CheckAndLogRenderLock())
+            {
+                if (!IsVisible && _charaHandler != null)
+                {
+                    PlayerName = string.Empty;
+                    _charaHandler.Dispose();
+                    _charaHandler = null;
+                }
+                return;
+            }
+
             _penumbraCollection = _ipcManager.Penumbra.CreateTemporaryCollectionAsync(logger, Pair.UserData.UID).ConfigureAwait(false).GetAwaiter().GetResult();
             if (!IsVisible && _charaHandler != null)
             {
@@ -190,16 +201,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             return;
         }
 
-        var renderLockServerIndex = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
-        if (renderLockServerIndex != Pair.ServerIndex && renderLockServerIndex > -1)
+        if (!CheckAndLogRenderLock())
         {
-            Logger.LogInformation(
-                "Cannot apply character data to {Player} from server {NewServerIndex} ({NewServerName}): server {ExistingServerIndex} ({ExistingServerName}) already syncs this target",
-                PlayerName,
-                Pair.ServerIndex,
-                _serverInfo.ServerName,
-                renderLockServerIndex,
-                _serverConfigManager.GetServerByIndex(renderLockServerIndex).ServerName);
             return;
         }
 
@@ -561,6 +564,28 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Checks if this server has the render lock for the player. Returns true if we have the lock, false if another server has it.
+    /// Logs a conflict message if another server has the lock.
+    /// </summary>
+    private bool CheckAndLogRenderLock()
+    {
+        var renderLockServerIndex = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
+        if (renderLockServerIndex != Pair.ServerIndex && renderLockServerIndex > -1)
+        {
+            var existingServerName = _serverConfigManager.GetServerByIndex(renderLockServerIndex).ServerName;
+            Logger.LogInformation(
+                $"Cannot recreate collection for {{Player}} from server {{NewServerIndex}} ({{NewServerName}}): server {{ExistingServerIndex}} ({{ExistingServerName}}) already syncs this target",
+                PlayerName,
+                Pair.ServerIndex,
+                _serverInfo.ServerName,
+                renderLockServerIndex,
+                existingServerName);
+            return false;
+        }
+        return true;
+    }
+
     private void FrameworkUpdate()
     {
         if (string.IsNullOrEmpty(PlayerName))
@@ -629,18 +654,6 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             Logger.LogTrace("Reapplying Pet Names data for {this}", this);
             await _ipcManager.PetNames.SetPlayerData(PlayerCharacter, _cachedData.PetNamesData).ConfigureAwait(false);
         });
-
-		// Only the render-lock owner should assign the temp collection to avoid a non-owner overwriting
-		// an already-populated collection with an empty one (which would render the target vanilla).
-		var lockOwner = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
-		if (lockOwner == Pair.ServerIndex)
-		{
-			_ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, _charaHandler.GetGameObject()!.ObjectIndex).GetAwaiter().GetResult();
-		}
-		else
-		{
-			Logger.LogTrace("Skipping temp collection assignment for {this} - render lock is owned by server {owner}", this, lockOwner);
-		}
     }
 
     private async Task RevertCustomizationDataAsync(ObjectKind objectKind, string name, Guid applicationId, CancellationToken cancelToken)
@@ -760,6 +773,11 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                     moddedDictionary[(gamePath, null)] = item.FileSwapPath;
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is expected during normal operation (disconnects, timeouts, shutdowns)
+            Logger.LogDebug("[BASE-{appBase}] Calculation of replacements was cancelled", applicationBase);
         }
         catch (Exception ex)
         {

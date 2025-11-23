@@ -145,8 +145,8 @@ public sealed class FileCacheManager : IHostedService
     public async Task<(string, byte[])> GetCompressedFileData(string fileHash, CancellationToken uploadToken)
     {
         var fileCache = GetFileCacheByHash(fileHash)!.ResolvedFilepath;
-        return (fileHash, LZ4Wrapper.WrapHC(await File.ReadAllBytesAsync(fileCache, uploadToken).ConfigureAwait(false), 0,
-            (int)new FileInfo(fileCache).Length));
+        var fileData = await File.ReadAllBytesAsync(fileCache, uploadToken).ConfigureAwait(false);
+        return (fileHash, await Task.Run(() => LZ4Wrapper.WrapHC(fileData, 0, fileData.Length), uploadToken).ConfigureAwait(false));
     }
 
     public FileCacheEntity? GetFileCacheByHash(string hash)
