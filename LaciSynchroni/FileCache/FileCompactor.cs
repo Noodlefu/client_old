@@ -87,6 +87,8 @@ public sealed class FileCompactor
             return;
         }
 
+        // Delay slightly to ensure file handle is fully released before attempting compression
+        await Task.Delay(50, token).ConfigureAwait(false);
         CompactFile(filePath);
     }
 
@@ -192,22 +194,39 @@ public sealed class FileCompactor
         ulong length = (ulong)Marshal.SizeOf(_efInfo);
         try
         {
-            using (var fs = new FileStream(path, FileMode.Open))
+            // Retry logic for file access - files might be temporarily locked by other processes
+            const int maxRetries = 3;
+            const int retryDelayMs = 100;
+            
+            for (int attempt = 0; attempt < maxRetries; attempt++)
             {
-#pragma warning disable S3869 // "SafeHandle.DangerousGetHandle" should not be called
-                var hFile = fs.SafeFileHandle.DangerousGetHandle();
-#pragma warning restore S3869 // "SafeHandle.DangerousGetHandle" should not be called
-                if (fs.SafeFileHandle.IsInvalid)
+                try
                 {
-                    _logger.LogWarning("Invalid file handle to {file}", path);
-                }
-                else
-                {
-                    var ret = WofSetFileDataLocation(hFile, WOF_PROVIDER_FILE, efInfoPtr, length);
-                    if (!(ret == 0 || ret == unchecked((int)0x80070158)))
+                    using (var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
                     {
-                        _logger.LogWarning("Failed to compact {file}: {ret}", path, ret.ToString("X"));
+#pragma warning disable S3869 // "SafeHandle.DangerousGetHandle" should not be called
+                        var hFile = fs.SafeFileHandle.DangerousGetHandle();
+#pragma warning restore S3869 // "SafeHandle.DangerousGetHandle" should not be called
+                        if (fs.SafeFileHandle.IsInvalid)
+                        {
+                            _logger.LogWarning("Invalid file handle to {file}", path);
+                            break;
+                        }
+                        else
+                        {
+                            var ret = WofSetFileDataLocation(hFile, WOF_PROVIDER_FILE, efInfoPtr, length);
+                            if (!(ret == 0 || ret == unchecked((int)0x80070158)))
+                            {
+                                _logger.LogWarning("Failed to compact {file}: {ret}", path, ret.ToString("X"));
+                            }
+                            return;
+                        }
                     }
+                }
+                catch (IOException) when (attempt < maxRetries - 1)
+                {
+                    // File is locked, wait and retry
+                    Thread.Sleep(retryDelayMs);
                 }
             }
         }

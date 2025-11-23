@@ -13,8 +13,28 @@ public static class Crypto
 
     public static string GetFileHash(this string filePath)
     {
-        using SHA1CryptoServiceProvider cryptoProvider = new();
-        return BitConverter.ToString(cryptoProvider.ComputeHash(File.ReadAllBytes(filePath))).Replace("-", "", StringComparison.Ordinal);
+        const int maxRetries = 5;
+        const int retryDelayMs = 50;
+        
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            try
+            {
+                using SHA1CryptoServiceProvider cryptoProvider = new();
+                using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                var hashBytes = cryptoProvider.ComputeHash(fileStream);
+                return BitConverter.ToString(hashBytes).Replace("-", "", StringComparison.Ordinal);
+            }
+            catch (IOException) when (attempt < maxRetries - 1)
+            {
+                Thread.Sleep(retryDelayMs);
+            }
+        }
+        
+        using SHA1CryptoServiceProvider finalCryptoProvider = new();
+        using var finalFileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var finalHashBytes = finalCryptoProvider.ComputeHash(finalFileStream);
+        return BitConverter.ToString(finalHashBytes).Replace("-", "", StringComparison.Ordinal);
     }
 
     public static string GetHash256(this (string, ushort) playerToHash)

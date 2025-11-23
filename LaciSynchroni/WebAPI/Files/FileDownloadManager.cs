@@ -10,6 +10,7 @@ using LaciSynchroni.WebAPI.Files.Models;
 using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 
 namespace LaciSynchroni.WebAPI.Files;
 
@@ -246,6 +247,13 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     {
         var downloadGroups = CurrentDownloads.GroupBy(f => f.DownloadUri.Host + ":" + f.DownloadUri.Port, StringComparer.Ordinal);
 
+        // Build dictionary for O(1) hash lookups instead of O(n) First() calls
+        var fileReplacementDict = new Dictionary<string, FileReplacementData>(fileReplacement.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var file in fileReplacement)
+        {
+            fileReplacementDict[file.Hash] = file;
+        }
+
         foreach (var downloadGroup in downloadGroups)
         {
             _downloadStatus[downloadGroup.Key] = new FileDownloadStatus()
@@ -311,6 +319,15 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 return;
             }
 
+            // Check if block file exists before trying to read it (may not exist if download was cancelled or failed)
+            fi.Refresh();
+            if (!fi.Exists)
+            {
+                Logger.LogDebug("{dlName}: Block file does not exist, skipping extraction for {id}", fi.Name, requestId);
+                _orchestrator.ReleaseDownloadSlot();
+                return;
+            }
+
             FileStream? fileBlockStream = null;
             try
             {
@@ -320,38 +337,82 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     status.DownloadStatus = DownloadStatus.Decompressing;
                 }
                 fileBlockStream = File.OpenRead(blockFile);
-                while (fileBlockStream.Position < fileBlockStream.Length)
+                
+                // Collect all file entries and read compressed data sequentially
+                var fileEntries = new List<(string fileHash, long fileLengthBytes, byte[] compressedData)>();
+                
+                try
                 {
-                    (string fileHash, long fileLengthBytes) = ReadBlockFileHeader(fileBlockStream);
-
+                    while (fileBlockStream.Position < fileBlockStream.Length)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        
+                        (string fileHash, long fileLengthBytes) = ReadBlockFileHeader(fileBlockStream);
+                        
+                        // Read compressed data immediately while we have the stream position
+                        byte[] compressedFileContent = new byte[fileLengthBytes];
+                        int totalRead = 0;
+                        while (totalRead < fileLengthBytes)
+                        {
+                            int readBytes = await fileBlockStream.ReadAsync(compressedFileContent, totalRead, (int)(fileLengthBytes - totalRead), token).ConfigureAwait(false);
+                            if (readBytes == 0) throw new EndOfStreamException();
+                            totalRead += readBytes;
+                        }
+                        
+                        fileEntries.Add((fileHash, fileLengthBytes, compressedFileContent));
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cancellation during file reading is expected, log at debug level
+                    Logger.LogDebug("{dlName}: Block file reading cancelled", fi.Name);
+                    throw; // Re-throw to be handled by outer catch
+                }
+                
+                await fileBlockStream.DisposeAsync().ConfigureAwait(false);
+                fileBlockStream = null;
+                
+                foreach (var entry in fileEntries)
+                {
+                    token.ThrowIfCancellationRequested();
+                    
                     try
                     {
-                        var fileExtension = fileReplacement.First(f => string.Equals(f.Hash, fileHash, StringComparison.OrdinalIgnoreCase)).GamePaths[0].Split(".")[^1];
-                        var filePath = _fileDbManager.GetCacheFilePath(fileHash, fileExtension);
-                        Logger.LogDebug("{dlName}: Decompressing {file}:{le} => {dest}", fi.Name, fileHash, fileLengthBytes, filePath);
-
-                        byte[] compressedFileContent = new byte[fileLengthBytes];
-                        var readBytes = await fileBlockStream.ReadAsync(compressedFileContent, CancellationToken.None).ConfigureAwait(false);
-                        if (readBytes != fileLengthBytes)
+                        if (!fileReplacementDict.TryGetValue(entry.fileHash, out var fileReplacementData))
                         {
-                            throw new EndOfStreamException();
+                            Logger.LogWarning("{dlName}: File hash {fileHash} not found in replacement data", fi.Name, entry.fileHash);
+                            continue;
                         }
-                        MungeBuffer(compressedFileContent);
+                        
+                        var fileExtension = fileReplacementData.GamePaths[0].Split(".")[^1];
+                        var filePath = _fileDbManager.GetCacheFilePath(entry.fileHash, fileExtension);
+                        Logger.LogDebug("{dlName}: Decompressing {file}:{le} => {dest}", fi.Name, entry.fileHash, entry.fileLengthBytes, filePath);
 
-                        var decompressedFile = LZ4Wrapper.Unwrap(compressedFileContent);
-                        await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, CancellationToken.None).ConfigureAwait(false);
+                        MungeBuffer(entry.compressedData);
 
-                        PersistFileToStorage(fileHash, filePath);
+                        var decompressedFile = LZ4Wrapper.Unwrap(entry.compressedData);
+                        await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, token).ConfigureAwait(false);
+
+                        PersistFileToStorage(entry.fileHash, filePath);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Logger.LogDebug("{dlName}: Decompression cancelled for {fileHash}", fi.Name, entry.fileHash);
+                        throw;
                     }
                     catch (EndOfStreamException)
                     {
-                        Logger.LogWarning("{dlName}: Failure to extract file {fileHash}, stream ended prematurely", fi.Name, fileHash);
+                        Logger.LogWarning("{dlName}: Failure to extract file {fileHash}, stream ended prematurely", fi.Name, entry.fileHash);
                     }
                     catch (Exception e)
                     {
-                        Logger.LogWarning(e, "{dlName}: Error during decompression", fi.Name);
+                        Logger.LogWarning(e, "{dlName}: Error during decompression of {fileHash}", fi.Name, entry.fileHash);
                     }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.LogDebug("{dlName}: Block file processing cancelled", fi.Name);
             }
             catch (EndOfStreamException)
             {
@@ -389,17 +450,11 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     private void PersistFileToStorage(string fileHash, string filePath)
     {
         var fi = new FileInfo(filePath);
-        Func<DateTime> RandomDayInThePast()
-        {
-            DateTime start = new(1995, 1, 1, 1, 1, 1, DateTimeKind.Local);
-            Random gen = new();
-            int range = (DateTime.Today - start).Days;
-            return () => start.AddDays(gen.Next(range));
-        }
-
-        fi.CreationTime = RandomDayInThePast().Invoke();
+        DateTime start = new(1995, 1, 1, 1, 1, 1, DateTimeKind.Local);
+        int range = (DateTime.Today - start).Days;
+        fi.CreationTime = start.AddDays(Random.Shared.Next(range));
         fi.LastAccessTime = DateTime.Today;
-        fi.LastWriteTime = RandomDayInThePast().Invoke();
+        fi.LastWriteTime = start.AddDays(Random.Shared.Next(range));
         try
         {
             var entry = _fileDbManager.CreateCacheEntry(filePath);
