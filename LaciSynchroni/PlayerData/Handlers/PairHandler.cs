@@ -1,4 +1,4 @@
-﻿using FFXIVClientStructs.FFXIV.Client.Game.Object;
+using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using LaciSynchroni.Common.Data;
 using LaciSynchroni.FileCache;
 using LaciSynchroni.Interop.Ipc;
@@ -79,8 +79,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             _downloadCancellationTokenSource?.CancelDispose();
             _applicationCancellationTokenSource = _applicationCancellationTokenSource?.CancelRecreate();
             _charaHandler?.Invalidate();
-			// Release render lock on zone switch to prevent stale ownership blocking other servers
-			_concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
+            // Release render lock on zone switch to prevent stale ownership blocking other servers
+            _concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
             IsVisible = false;
         });
         Mediator.Subscribe<PenumbraInitializedMessage>(this, (_) =>
@@ -472,17 +472,28 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
         downloadToken.ThrowIfCancellationRequested();
 
-        var appToken = _applicationCancellationTokenSource?.Token;
-        while ((!_applicationTask?.IsCompleted ?? false)
-               && !downloadToken.IsCancellationRequested
-               && (!appToken?.IsCancellationRequested ?? false))
+        // Wait for previous application task with timeout to prevent deadlocks
+        if (_applicationTask != null && !_applicationTask.IsCompleted)
         {
-            // block until current application is done
             Logger.LogDebug("[BASE-{appBase}] Waiting for current data application (Id: {id}) for player ({handler}) to finish", applicationBase, _applicationId, PlayerName);
-            await Task.Delay(250).ConfigureAwait(false);
+            try
+            {
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(downloadToken, timeoutCts.Token);
+                await _applicationTask.WaitAsync(combinedCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (downloadToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                // Timeout occurred, log warning and proceed anyway to prevent deadlock
+                Logger.LogWarning("[BASE-{appBase}] Timeout waiting for previous application task (Id: {id}), proceeding anyway", applicationBase, _applicationId);
+            }
         }
 
-        if (downloadToken.IsCancellationRequested || (appToken?.IsCancellationRequested ?? false)) return;
+        if (downloadToken.IsCancellationRequested) return;
 
         _applicationCancellationTokenSource = _applicationCancellationTokenSource.CancelRecreate() ?? new CancellationTokenSource();
         var token = _applicationCancellationTokenSource.Token;
@@ -537,13 +548,13 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
             Logger.LogDebug("[{applicationId}] Application finished", _applicationId);
         }
-		catch (OperationCanceledException)
-		{
-			// Release render lock when an application is cancelled so another server can take over
-			_concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
-			Logger.LogDebug("[{applicationId}] Application cancelled", _applicationId);
-		}
-		catch (Exception ex)
+        catch (OperationCanceledException)
+        {
+            // Release render lock when an application is cancelled so another server can take over
+            _concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
+            Logger.LogDebug("[{applicationId}] Application cancelled", _applicationId);
+        }
+        catch (Exception ex)
         {
             if (ex is AggregateException aggr && aggr.InnerExceptions.Any(e => e is ArgumentNullException || e is NullReferenceException))
             {
@@ -556,8 +567,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             {
                 Logger.LogWarning(ex, "[{applicationId}] Cancelled", _applicationId);
             }
-			// On failures, release render lock to avoid stale ownership
-			_concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
+            // On failures, release render lock to avoid stale ownership
+            _concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
         }
     }
 
@@ -603,8 +614,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             _charaHandler.Invalidate();
             _downloadCancellationTokenSource?.CancelDispose();
             _downloadCancellationTokenSource = null;
-			// Release render lock when the player is no longer visible
-			_concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
+            // Release render lock when the player is no longer visible
+            _concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
             Logger.LogTrace("{this} visibility changed, now: {visi}", this, IsVisible);
         }
     }
@@ -630,17 +641,17 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             await _ipcManager.PetNames.SetPlayerData(PlayerCharacter, _cachedData.PetNamesData).ConfigureAwait(false);
         });
 
-		// Only the render-lock owner should assign the temp collection to avoid a non-owner overwriting
-		// an already-populated collection with an empty one (which would render the target vanilla).
-		var lockOwner = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
-		if (lockOwner == Pair.ServerIndex)
-		{
-			_ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, _charaHandler.GetGameObject()!.ObjectIndex).GetAwaiter().GetResult();
-		}
-		else
-		{
-			Logger.LogTrace("Skipping temp collection assignment for {this} - render lock is owned by server {owner}", this, lockOwner);
-		}
+        // Only the render-lock owner should assign the temp collection to avoid a non-owner overwriting
+        // an already-populated collection with an empty one (which would render the target vanilla).
+        var lockOwner = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
+        if (lockOwner == Pair.ServerIndex)
+        {
+            _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, _charaHandler.GetGameObject()!.ObjectIndex).GetAwaiter().GetResult();
+        }
+        else
+        {
+            Logger.LogTrace("Skipping temp collection assignment for {this} - render lock is owned by server {owner}", this, lockOwner);
+        }
     }
 
     private async Task RevertCustomizationDataAsync(ObjectKind objectKind, string name, Guid applicationId, CancellationToken cancelToken)
@@ -732,7 +743,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 var fileCache = _fileDbManager.GetFileCacheByHash(item.Hash);
                 if (fileCache != null)
                 {
-                    if (string.IsNullOrEmpty(new FileInfo(fileCache.ResolvedFilepath).Extension))
+                    if (string.IsNullOrEmpty(Path.GetExtension(fileCache.ResolvedFilepath)))
                     {
                         hasMigrationChanges = true;
                         fileCache = _fileDbManager.MigrateFileHashToExtension(fileCache, item.GamePaths[0].Split(".")[^1]);
@@ -760,6 +771,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                     moddedDictionary[(gamePath, null)] = item.FileSwapPath;
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            Logger.LogDebug("[BASE-{appBase}] Calculation replacements was cancelled", applicationBase);
         }
         catch (Exception ex)
         {

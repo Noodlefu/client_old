@@ -1,4 +1,4 @@
-﻿using FFXIVClientStructs.FFXIV.Client.Game.Character;
+using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using LaciSynchroni.Common.Data.Enum;
 using LaciSynchroni.FileCache;
 using LaciSynchroni.Interop.Ipc;
@@ -96,7 +96,10 @@ public class PlayerDataFactory
 
     private unsafe bool CheckForNullDrawObjectUnsafe(IntPtr playerPointer)
     {
-        return ((Character*)playerPointer)->GameObject.DrawObject == null;
+        if (playerPointer == IntPtr.Zero) return true;
+        var character = (Character*)playerPointer;
+        if (character == null) return true;
+        return character->GameObject.DrawObject == null;
     }
 
     private async Task<CharacterDataFragment> CreateCharacterData(GameObjectHandler playerRelatedObject, CancellationToken ct)
@@ -133,10 +136,12 @@ public class PlayerDataFactory
 
         ct.ThrowIfCancellationRequested();
 
-        fragment.FileReplacements =
-                new HashSet<FileReplacement>(resolvedPaths.Select(c => new FileReplacement([.. c.Value], c.Key)), FileReplacementComparer.Instance)
-                .Where(p => p.HasFileReplacement).ToHashSet();
-        fragment.FileReplacements.RemoveWhere(c => c.GamePaths.Any(g => !CacheMonitor.AllowedFileExtensions.Any(e => g.EndsWith(e, StringComparison.OrdinalIgnoreCase))));
+        var fileReplacements = new HashSet<FileReplacement>(
+            resolvedPaths.Select(c => new FileReplacement([.. c.Value], c.Key)),
+            FileReplacementComparer.Instance);
+        fileReplacements.RemoveWhere(p => !p.HasFileReplacement);
+        fileReplacements.RemoveWhere(c => c.GamePaths.Any(g => !CacheMonitor.AllowedFileExtensions.Contains(Path.GetExtension(g), StringComparer.OrdinalIgnoreCase)));
+        fragment.FileReplacements = fileReplacements;
 
         ct.ThrowIfCancellationRequested();
 
@@ -351,7 +356,7 @@ public class PlayerDataFactory
             }
             else
             {
-                resolvedPaths[filePath] = new List<string>(reverse[i].Select(c => c.ToLowerInvariant()).ToList());
+                resolvedPaths[filePath] = reverse[i].Select(c => c.ToLowerInvariant()).ToList();
             }
         }
 

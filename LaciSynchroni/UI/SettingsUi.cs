@@ -734,9 +734,11 @@ public class SettingsUi : WindowMediatorSubscriberBase
                 }
                 else
                 {
-
                     UiSharedService.TextWrapped($"Storage validation is running: {_currentProgress.Item1}/{_currentProgress.Item2}");
-                    UiSharedService.TextWrapped($"Current item: {_currentProgress.Item3.ResolvedFilepath}");
+                    if (_currentProgress.Item3 != null)
+                    {
+                        UiSharedService.TextWrapped($"Current item: {_currentProgress.Item3.ResolvedFilepath}");
+                    }
                 }
             }
         }
@@ -1292,7 +1294,7 @@ public class SettingsUi : WindowMediatorSubscriberBase
                     _serverConfigurationManager.Save();
                 }
 
-                
+
                 if (ImGui.Combo("DTR notification icon", ref serverIconIndex, DtrEntry.DtrIcons))
                 {
                     selectedServer.ServerIcon = DtrEntry.DtrIcons[serverIconIndex].IsNullOrEmpty() ? null : DtrEntry.DtrIcons[serverIconIndex][0];
@@ -2124,7 +2126,7 @@ public class SettingsUi : WindowMediatorSubscriberBase
         UiSharedService.TextWrapped(
             "To force swap a lock for debug purposes, release the lock here. Then, pause and enable the pair" +
             "for the server you want to lock to exist for.");
-        
+
         var currentLocks = _concurrentPairLockService.GetCurrentRenderLocks().ToList();
         if (currentLocks.Count <= 0)
         {
@@ -2152,10 +2154,10 @@ public class SettingsUi : WindowMediatorSubscriberBase
         // Shorten the actual character name in case someone screenshots this - rest is shown on hover
         ImGui.TextUnformatted(AnonymityUtils.ShortenPlayerName(lockData.CharName));
         UiSharedService.AttachToolTip(lockData.CharName);
-                    
+
         ImGui.TableNextColumn();
         ImGui.TextUnformatted(lockData.PlayerHash.Substring(0, 15));
-        
+
         ImGui.TableNextColumn();
         ImGui.TextUnformatted(_serverConfigurationManager.GetServerNameByIndex(lockData.Index));
 

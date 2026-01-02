@@ -1,4 +1,4 @@
-﻿using Dalamud.Utility;
+using Dalamud.Utility;
 using K4os.Compression.LZ4.Legacy;
 using LaciSynchroni.Common.Data;
 using LaciSynchroni.Common.Dto.Files;
@@ -17,12 +17,17 @@ namespace LaciSynchroni.WebAPI.Files;
 
 public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 {
+    private const int MaxRetryAttempts = 3;
+    private static readonly TimeSpan[] RetryDelays = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)];
+
     private readonly Dictionary<string, FileDownloadStatus> _downloadStatus;
+    private readonly Lock _downloadStatusLock = new();
     private readonly FileCompactor _fileCompactor;
     private readonly FileCacheManager _fileDbManager;
     private readonly ServerConfigurationManager _serverManager;
     private readonly FileTransferOrchestrator _orchestrator;
     private readonly List<ThrottledStream> _activeDownloadStreams;
+    private readonly SemaphoreSlim _decompressGate = new(Math.Max(1, Environment.ProcessorCount / 2));
 
     public FileDownloadManager(ILogger<FileDownloadManager> logger, SyncMediator mediator,
         FileTransferOrchestrator orchestrator,
@@ -37,12 +42,20 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
         Mediator.Subscribe<DownloadLimitChangedMessage>(this, (msg) =>
         {
-            if (!_activeDownloadStreams.Any()) return;
-            var newLimit = _orchestrator.DownloadLimitPerSlot();
-            Logger.LogTrace("Setting new Download Speed Limit to {newLimit}", newLimit);
-            foreach (var stream in _activeDownloadStreams)
+            try
             {
-                stream.BandwidthLimit = newLimit;
+                var streams = _activeDownloadStreams.ToList();
+                if (streams.Count == 0) return;
+                var newLimit = _orchestrator.DownloadLimitPerSlot();
+                Logger.LogTrace("Setting new Download Speed Limit to {newLimit}", newLimit);
+                foreach (var stream in streams)
+                {
+                    stream.BandwidthLimit = newLimit;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogTrace(ex, "Error updating download speed limit");
             }
         });
     }
@@ -62,7 +75,37 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     public void ClearDownload()
     {
         CurrentDownloads.Clear();
-        _downloadStatus.Clear();
+        lock (_downloadStatusLock)
+        {
+            _downloadStatus.Clear();
+        }
+    }
+
+    private void SetDownloadStatus(string key, DownloadStatus status)
+    {
+        lock (_downloadStatusLock)
+        {
+            if (_downloadStatus.TryGetValue(key, out var value))
+                value.DownloadStatus = status;
+        }
+    }
+
+    private void AddTransferredBytes(string key, long bytes)
+    {
+        lock (_downloadStatusLock)
+        {
+            if (_downloadStatus.TryGetValue(key, out var value))
+                value.TransferredBytes += bytes;
+        }
+    }
+
+    private void SetTransferredFiles(string key, int files)
+    {
+        lock (_downloadStatusLock)
+        {
+            if (_downloadStatus.TryGetValue(key, out var value))
+                value.TransferredFiles = files;
+        }
     }
 
     public async Task DownloadFiles(int serverIndex, GameObjectHandler gameObject, List<FileReplacementData> fileReplacementDto, CancellationToken ct)
@@ -137,6 +180,50 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             else fileLength.Add(readChar);
         }
         return (string.Join("", hashName), long.Parse(string.Join("", fileLength)));
+    }
+
+    private async Task DownloadAndMungeFileHttpClientWithRetry(int serverIndex, string downloadGroup, Guid requestId, List<DownloadFileTransfer> fileTransfer, string tempPath, IProgress<long> progress, CancellationToken ct)
+    {
+        Exception? lastException = null;
+
+        for (int attempt = 0; attempt < MaxRetryAttempts; attempt++)
+        {
+            try
+            {
+                await DownloadAndMungeFileHttpClient(serverIndex, downloadGroup, requestId, fileTransfer, tempPath, progress, ct).ConfigureAwait(false);
+                return; // Success
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // Don't retry on cancellation
+            }
+            catch (InvalidDataException)
+            {
+                throw; // Don't retry on 404/401 errors
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+
+                if (attempt < MaxRetryAttempts - 1)
+                {
+                    Logger.LogWarning(ex, "Download attempt {Attempt}/{MaxAttempts} failed for request {RequestId}, retrying in {Delay}...",
+                        attempt + 1, MaxRetryAttempts, requestId, RetryDelays[attempt]);
+
+                    try
+                    {
+                        await Task.Delay(RetryDelays[attempt], ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                }
+            }
+        }
+
+        // All retries exhausted
+        throw new IOException($"Download failed after {MaxRetryAttempts} attempts for request {requestId}", lastException);
     }
 
     private async Task DownloadAndMungeFileHttpClient(int serverIndex, string downloadGroup, Guid requestId, List<DownloadFileTransfer> fileTransfer, string tempPath, IProgress<long> progress, CancellationToken ct)
@@ -251,14 +338,17 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
         foreach (var downloadGroup in downloadGroups)
         {
-            _downloadStatus[downloadGroup.Key] = new FileDownloadStatus()
+            lock (_downloadStatusLock)
             {
-                DownloadStatus = DownloadStatus.Initializing,
-                TotalBytes = downloadGroup.Sum(c => c.Total),
-                TotalFiles = 1,
-                TransferredBytes = 0,
-                TransferredFiles = 0
-            };
+                _downloadStatus[downloadGroup.Key] = new FileDownloadStatus()
+                {
+                    DownloadStatus = DownloadStatus.Initializing,
+                    TotalBytes = downloadGroup.Sum(c => c.Total),
+                    TotalFiles = 1,
+                    TransferredBytes = 0,
+                    TransferredFiles = 0
+                };
+            }
         }
 
         Mediator.Publish(new DownloadStartedMessage(gameObjectHandler, _downloadStatus));
@@ -282,24 +372,26 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
             var blockFile = _fileDbManager.GetCacheFilePath(requestId.ToString("N"), "blk");
             FileInfo fi = new(blockFile);
+
+            // Use slot lease pattern to ensure slot is always released
+            SetDownloadStatus(fileGroup.Key, DownloadStatus.WaitingForSlot);
+            await using var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
+
             try
             {
-                _downloadStatus[fileGroup.Key].DownloadStatus = DownloadStatus.WaitingForSlot;
-                await _orchestrator.WaitForDownloadSlotAsync(token).ConfigureAwait(false);
-                _downloadStatus[fileGroup.Key].DownloadStatus = DownloadStatus.WaitingForQueue;
+                SetDownloadStatus(fileGroup.Key, DownloadStatus.WaitingForQueue);
                 Progress<long> progress = new((bytesDownloaded) =>
                 {
                     try
                     {
-                        if (!_downloadStatus.TryGetValue(fileGroup.Key, out FileDownloadStatus? value)) return;
-                        value.TransferredBytes += bytesDownloaded;
+                        AddTransferredBytes(fileGroup.Key, bytesDownloaded);
                     }
                     catch (Exception ex)
                     {
                         Logger.LogWarning(ex, "Could not set download progress");
                     }
                 });
-                await DownloadAndMungeFileHttpClient(serverIndex, fileGroup.Key, requestId, [.. fileGroup], blockFile, progress, token).ConfigureAwait(false);
+                await DownloadAndMungeFileHttpClientWithRetry(serverIndex, fileGroup.Key, requestId, [.. fileGroup], blockFile, progress, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -307,7 +399,6 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             }
             catch (Exception ex)
             {
-                _orchestrator.ReleaseDownloadSlot();
                 File.Delete(blockFile);
                 Logger.LogError(ex, "{dlName}: Error during download of {id}", fi.Name, requestId);
                 ClearDownload();
@@ -317,11 +408,8 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             FileStream? fileBlockStream = null;
             try
             {
-                if (_downloadStatus.TryGetValue(fileGroup.Key, out var status))
-                {
-                    status.TransferredFiles = 1;
-                    status.DownloadStatus = DownloadStatus.Decompressing;
-                }
+                SetTransferredFiles(fileGroup.Key, 1);
+                SetDownloadStatus(fileGroup.Key, DownloadStatus.Decompressing);
                 fileBlockStream = File.OpenRead(blockFile);
                 while (fileBlockStream.Position < fileBlockStream.Length)
                 {
@@ -341,8 +429,32 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                         }
                         MungeBuffer(compressedFileContent);
 
-                        var decompressedFile = LZ4Wrapper.Unwrap(compressedFileContent);
-                        await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, CancellationToken.None).ConfigureAwait(false);
+                        // Gate decompression to prevent CPU exhaustion
+                        // Decompression is completed fully before releasing the gate to ensure
+                        // we don't lose decompressed data if file write fails
+                        byte[] decompressedFile;
+                        await _decompressGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                        try
+                        {
+                            decompressedFile = LZ4Wrapper.Unwrap(compressedFileContent);
+                        }
+                        finally
+                        {
+                            _decompressGate.Release();
+                        }
+
+                        // Write decompressed file outside of the gate to not block other decompressions
+                        try
+                        {
+                            await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch (Exception writeEx)
+                        {
+                            Logger.LogWarning(writeEx, "{dlName}: Failed to write decompressed file {fileHash} to {filePath}", fi.Name, fileHash, filePath);
+                            // Clean up partial file if it exists
+                            try { File.Delete(filePath); } catch { /* ignore cleanup errors */ }
+                            throw;
+                        }
 
                         PersistFileToStorage(fileHash, filePath);
                     }
@@ -366,7 +478,6 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             }
             finally
             {
-                _orchestrator.ReleaseDownloadSlot();
                 if (fileBlockStream != null)
                     await fileBlockStream.DisposeAsync().ConfigureAwait(false);
                 File.Delete(blockFile);
@@ -382,20 +493,23 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     {
         // Separate out the files with direct download URLs
         var directDownloads = CurrentDownloads.Where(download => download.IsDirectDownload && !string.IsNullOrEmpty(download.DownloadUri.AbsoluteUri)).ToList();
-        if(!directDownloads.Any())
+        if (!directDownloads.Any())
             return;
 
         // Create download status trackers for the direct downloads
         foreach (var directDownload in directDownloads)
         {
-            _downloadStatus[directDownload.DownloadUri.AbsoluteUri!] = new FileDownloadStatus()
+            lock (_downloadStatusLock)
             {
-                DownloadStatus = DownloadStatus.Initializing,
-                TotalBytes = directDownload.Total,
-                TotalFiles = 1,
-                TransferredBytes = 0,
-                TransferredFiles = 0
-            };
+                _downloadStatus[directDownload.DownloadUri.AbsoluteUri!] = new FileDownloadStatus()
+                {
+                    DownloadStatus = DownloadStatus.Initializing,
+                    TotalBytes = directDownload.Total,
+                    TotalFiles = 1,
+                    TransferredBytes = 0,
+                    TransferredFiles = 0
+                };
+            }
         }
 
         Logger.LogInformation("Downloading {Direct} files directly.", directDownloads.Count);
@@ -410,15 +524,19 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         async (directDownload, token) =>
         {
             var directDownloadAbsoluteUri = directDownload.DownloadUri.AbsoluteUri;
-            if (!_downloadStatus.TryGetValue(directDownloadAbsoluteUri, out var downloadTracker))
+            bool hasStatus;
+            lock (_downloadStatusLock)
+            {
+                hasStatus = _downloadStatus.ContainsKey(directDownloadAbsoluteUri);
+            }
+            if (!hasStatus)
                 return;
 
             Progress<long> progress = new((bytesDownloaded) =>
             {
                 try
                 {
-                    if (!_downloadStatus.TryGetValue(directDownloadAbsoluteUri, out FileDownloadStatus? value)) return;
-                    value.TransferredBytes += bytesDownloaded;
+                    AddTransferredBytes(directDownloadAbsoluteUri, bytesDownloaded);
                 }
                 catch (Exception ex)
                 {
@@ -428,36 +546,34 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
             var tempFilename = _fileDbManager.GetCacheFilePath(directDownload.Hash, "bin");
 
+            // Use slot lease pattern to ensure slot is always released
+            SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.WaitingForSlot);
+            await using var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
+
             try
             {
-                downloadTracker.DownloadStatus = DownloadStatus.WaitingForSlot;
-                await _orchestrator.WaitForDownloadSlotAsync(token).ConfigureAwait(false);
-
-                // Download the compressed file directly
-                downloadTracker.DownloadStatus = DownloadStatus.Downloading;
+                // Download the compressed file directly with retry logic
+                SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Downloading);
                 Logger.LogDebug("{Hash} Beginning direct download of file from {Url}", directDownload.Hash, directDownloadAbsoluteUri);
-                await DownloadFileThrottled(serverIndex,directDownload.DownloadUri, tempFilename, progress, token).ConfigureAwait(false);
+                await DownloadFileThrottledWithRetry(serverIndex, directDownload.DownloadUri, tempFilename, progress, token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException ex)
+            catch (OperationCanceledException)
             {
                 Logger.LogDebug("{Hash}: Detected cancellation of direct download, discarding file.", directDownload.Hash);
-                _orchestrator.ReleaseDownloadSlot();
                 File.Delete(tempFilename);
-                Logger.LogError(ex, "{Hash}: Error during direct download.", directDownload.Hash);
                 ClearDownload();
                 return;
             }
             catch (Exception ex)
             {
-                _orchestrator.ReleaseDownloadSlot();
                 File.Delete(tempFilename);
                 Logger.LogError(ex, "{Hash}: Error during direct download.", directDownload.Hash);
                 ClearDownload();
                 return;
             }
 
-            downloadTracker.TransferredFiles = 1;
-            downloadTracker.DownloadStatus = DownloadStatus.Decompressing;
+            SetTransferredFiles(directDownloadAbsoluteUri, 1);
+            SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Decompressing);
 
             try
             {
@@ -465,8 +581,34 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 var finalFilename = _fileDbManager.GetCacheFilePath(directDownload.Hash, fileExtension);
                 Logger.LogDebug("Decompressing direct download {Hash} from {CompressedFile} to {FinalFile}", directDownload.Hash, tempFilename, finalFilename);
                 byte[] compressedBytes = await File.ReadAllBytesAsync(tempFilename).ConfigureAwait(false);
-                var decompressedBytes = LZ4Wrapper.Unwrap(compressedBytes);
-                await _fileCompactor.WriteAllBytesAsync(finalFilename, decompressedBytes, CancellationToken.None).ConfigureAwait(false);
+
+                // Gate decompression to prevent CPU exhaustion
+                // Decompression is completed fully before releasing the gate to ensure
+                // we don't lose decompressed data if file write fails
+                byte[] decompressedBytes;
+                await _decompressGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    decompressedBytes = LZ4Wrapper.Unwrap(compressedBytes);
+                }
+                finally
+                {
+                    _decompressGate.Release();
+                }
+
+                // Write decompressed file outside of the gate to not block other decompressions
+                try
+                {
+                    await _fileCompactor.WriteAllBytesAsync(finalFilename, decompressedBytes, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception writeEx)
+                {
+                    Logger.LogWarning(writeEx, "{Hash}: Failed to write decompressed file to {FinalFilename}", directDownload.Hash, finalFilename);
+                    // Clean up partial file if it exists
+                    try { File.Delete(finalFilename); } catch { /* ignore cleanup errors */ }
+                    throw;
+                }
+
                 PersistFileToStorage(directDownload.Hash, finalFilename);
                 Logger.LogDebug("Finished direct download of {Hash}.", directDownload.Hash);
             }
@@ -476,7 +618,6 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             }
             finally
             {
-                _orchestrator.ReleaseDownloadSlot();
                 File.Delete(tempFilename);
             }
         });
@@ -487,6 +628,50 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         Logger.LogDebug("Download end: {Id}", gameObjectHandler);
 
         ClearDownload();
+    }
+
+    private async Task DownloadFileThrottledWithRetry(int serverIndex, Uri requestUrl, string destinationFilename, IProgress<long> progress, CancellationToken ct)
+    {
+        Exception? lastException = null;
+
+        for (int attempt = 0; attempt < MaxRetryAttempts; attempt++)
+        {
+            try
+            {
+                await DownloadFileThrottled(serverIndex, requestUrl, destinationFilename, progress, ct).ConfigureAwait(false);
+                return; // Success
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // Don't retry on cancellation
+            }
+            catch (InvalidDataException)
+            {
+                throw; // Don't retry on 404/401 errors
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+
+                if (attempt < MaxRetryAttempts - 1)
+                {
+                    Logger.LogWarning(ex, "Download attempt {Attempt}/{MaxAttempts} failed for {Url}, retrying in {Delay}...",
+                        attempt + 1, MaxRetryAttempts, requestUrl, RetryDelays[attempt]);
+
+                    try
+                    {
+                        await Task.Delay(RetryDelays[attempt], ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                }
+            }
+        }
+
+        // All retries exhausted
+        throw new IOException($"Download failed after {MaxRetryAttempts} attempts: {requestUrl}", lastException);
     }
 
     private async Task DownloadFileThrottled(int serverIndex, Uri requestUrl, string destinationFilename, IProgress<long> progress, CancellationToken ct)
@@ -550,7 +735,8 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 throw new InvalidDataException($"Http error {ex.StatusCode} (cancelled: {ct.IsCancellationRequested}): {requestUrl}", ex);
             }
 
-            return;
+            // Re-throw so retry logic can handle it
+            throw;
         }
 
         ThrottledStream? stream = null;

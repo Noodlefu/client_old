@@ -1106,7 +1106,14 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
     }
     public IDalamudTextureWrap LoadImage(byte[] imageData)
     {
-        return _textureProvider.CreateFromImageAsync(imageData).Result;
+        // Note: This blocks but is called infrequently (profile picture loads).
+        // Making this fully async would require refactoring all callers to handle null textures during loading.
+        return _textureProvider.CreateFromImageAsync(imageData).GetAwaiter().GetResult();
+    }
+
+    public Task<IDalamudTextureWrap> LoadImageAsync(byte[] imageData)
+    {
+        return _textureProvider.CreateFromImageAsync(imageData);
     }
 
     public void LoadLocalization(string languageCode)

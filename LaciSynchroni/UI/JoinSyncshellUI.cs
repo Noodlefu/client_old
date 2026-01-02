@@ -1,4 +1,4 @@
-﻿using Dalamud.Bindings.ImGui;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
@@ -29,6 +29,8 @@ internal class JoinSyncshellUI : WindowMediatorSubscriberBase
     private int _desiredServerForSyncshell = 0;
 
     private GroupJoinInfoDto? _groupJoinInfo = null;
+    private Task<GroupJoinInfoDto>? _joinGroupTask;
+    private bool _joinGroupFailed = false;
     private DefaultPermissionsDto _ownPermissions = null!;
     private string _previousPassword = string.Empty;
     private string _syncshellPassword = string.Empty;
@@ -109,16 +111,34 @@ internal class JoinSyncshellUI : WindowMediatorSubscriberBase
             ImGui.InputTextWithHint("##syncshellpw", "Password", ref _syncshellPassword, 50, ImGuiInputTextFlags.Password);
 
             // TODO disable when there is no more joins left
-            using (ImRaii.Disabled(string.IsNullOrEmpty(_desiredSyncshellToJoin) || string.IsNullOrEmpty(_syncshellPassword)))
+            using (ImRaii.Disabled(string.IsNullOrEmpty(_desiredSyncshellToJoin) || string.IsNullOrEmpty(_syncshellPassword) || (_joinGroupTask != null && !_joinGroupTask.IsCompleted)))
             {
-                if (_uiSharedService.IconTextButton(FontAwesomeIcon.Plus, "Join Syncshell"))
+                if (_joinGroupTask != null && _joinGroupTask.IsCompleted)
                 {
-                    _groupJoinInfo = _apiController.GroupJoinForServer(_desiredServerForSyncshell, new GroupPasswordDto(new GroupData(_desiredSyncshellToJoin), _syncshellPassword)).Result;
+                    try
+                    {
+                        _groupJoinInfo = _joinGroupTask.Result;
+                        _joinGroupFailed = !_groupJoinInfo.Success;
+                    }
+                    catch
+                    {
+                        _joinGroupFailed = true;
+                    }
+                    _joinGroupTask = null;
+                }
+                else if (_joinGroupTask != null && !_joinGroupTask.IsCompleted)
+                {
+                    ImGui.TextUnformatted("Joining...");
+                }
+                else if (_uiSharedService.IconTextButton(FontAwesomeIcon.Plus, "Join Syncshell"))
+                {
+                    _joinGroupFailed = false;
+                    _joinGroupTask = _apiController.GroupJoinForServer(_desiredServerForSyncshell, new GroupPasswordDto(new GroupData(_desiredSyncshellToJoin), _syncshellPassword));
                     _previousPassword = _syncshellPassword;
                     _syncshellPassword = string.Empty;
                 }
             }
-            if (_groupJoinInfo != null && !_groupJoinInfo.Success)
+            if (_joinGroupFailed)
             {
                 UiSharedService.ColorTextWrapped("Failed to join the Syncshell. This is due to one of following reasons:" + Environment.NewLine +
                     "- The Syncshell does not exist or the password is incorrect" + Environment.NewLine +

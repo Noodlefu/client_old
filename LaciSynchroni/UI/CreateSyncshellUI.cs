@@ -1,4 +1,4 @@
-﻿using Dalamud.Bindings.ImGui;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
@@ -24,6 +24,7 @@ public class CreateSyncshellUI : WindowMediatorSubscriberBase
     private readonly PairManager _pairManager;
     private bool _errorGroupCreate;
     private GroupJoinDto? _lastCreatedGroup;
+    private Task<GroupJoinDto>? _createGroupTask;
     private int _serverIndexForCreation = 0;
 
     public CreateSyncshellUI(ILogger<CreateSyncshellUI> logger, SyncMediator syncMediator, ApiController apiController, UiSharedService uiSharedService,
@@ -70,17 +71,26 @@ public class CreateSyncshellUI : WindowMediatorSubscriberBase
                                            StringComparison.Ordinal)) >=
                                    maxGroupsCreateable))
             {
-                if (_uiSharedService.IconTextButton(FontAwesomeIcon.Plus, "Create Syncshell"))
+                if (_createGroupTask != null && !_createGroupTask.IsCompleted)
+                {
+                    ImGui.TextUnformatted("Creating...");
+                }
+                else if (_createGroupTask != null && _createGroupTask.IsCompleted)
                 {
                     try
                     {
-                        _lastCreatedGroup = _apiController.GroupCreate(_serverIndexForCreation).Result;
+                        _lastCreatedGroup = _createGroupTask.Result;
                     }
                     catch
                     {
                         _lastCreatedGroup = null;
                         _errorGroupCreate = true;
                     }
+                    _createGroupTask = null;
+                }
+                else if (_uiSharedService.IconTextButton(FontAwesomeIcon.Plus, "Create Syncshell"))
+                {
+                    _createGroupTask = _apiController.GroupCreate(_serverIndexForCreation);
                 }
                 ImGui.SameLine();
             }

@@ -208,8 +208,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
     private void UpdateAllowedUsers()
     {
         AllowedUsers = [.. _userList.Select(u => u.UID)];
-        if (!AllowedUsers.Except(_charaDataFullDto.AllowedUsers.Select(u => u.UID), StringComparer.Ordinal).Any()
-            && !_charaDataFullDto.AllowedUsers.Select(u => u.UID).Except(AllowedUsers, StringComparer.Ordinal).Any())
+        var dtoUserIds = _charaDataFullDto.AllowedUsers.Select(u => u.UID).ToList();
+        if (!AllowedUsers.Except(dtoUserIds, StringComparer.Ordinal).Any()
+            && !dtoUserIds.Except(AllowedUsers, StringComparer.Ordinal).Any())
         {
             AllowedUsers = null;
         }
@@ -218,8 +219,9 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
     private void UpdateAllowedGroups()
     {
         AllowedGroups = [.. _groupList.Select(u => u.GID)];
-        if (!AllowedGroups.Except(_charaDataFullDto.AllowedGroups.Select(u => u.GID), StringComparer.Ordinal).Any()
-            && !_charaDataFullDto.AllowedGroups.Select(u => u.GID).Except(AllowedGroups, StringComparer.Ordinal).Any())
+        var dtoGroupIds = _charaDataFullDto.AllowedGroups.Select(u => u.GID).ToList();
+        if (!AllowedGroups.Except(dtoGroupIds, StringComparer.Ordinal).Any()
+            && !dtoGroupIds.Except(AllowedGroups, StringComparer.Ordinal).Any())
         {
             AllowedGroups = null;
         }

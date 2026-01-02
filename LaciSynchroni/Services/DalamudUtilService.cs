@@ -150,7 +150,7 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
 
     public string PluginInternalName => _pluginInterface.InternalName;
 
-    private Lazy<ulong> RebuildCID() =>  new(GetCID);
+    private Lazy<ulong> RebuildCID() => new(GetCID);
 
     public bool IsWine { get; init; }
 
@@ -317,6 +317,8 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
     {
         EnsureIsOnFramework();
         var playerChar = GetPlayerCharacter();
+        if (playerChar == null || playerChar.Address == IntPtr.Zero)
+            return 0;
         return ((BattleChara*)playerChar.Address)->Character.ContentId;
     }
 

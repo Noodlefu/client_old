@@ -27,9 +27,11 @@ public class SyncshellAdminUI : WindowMediatorSubscriberBase
     private readonly PairManager _pairManager;
     private readonly UiSharedService _uiSharedService;
     private List<BannedGroupUserDto> _bannedUsers = [];
+    private Task<List<BannedGroupUserDto>>? _getBannedUsersTask;
     private int _multiInvites;
     private string _newPassword;
     private bool _pwChangeSuccess;
+    private Task<bool>? _changePasswordTask;
     private Task<int>? _pruneTestTask;
     private Task<int>? _pruneTask;
     private int _pruneDays = 14;
@@ -362,9 +364,29 @@ public class SyncshellAdminUI : WindowMediatorSubscriberBase
                     var banNode = ImRaii.TreeNode("User Bans");
                     if (banNode)
                     {
-                        if (_uiSharedService.IconTextButton(FontAwesomeIcon.Retweet, "Refresh Banlist from Server"))
+                        if (_getBannedUsersTask != null && _getBannedUsersTask.IsCompleted)
                         {
-                            _bannedUsers = _apiController.GroupGetBannedUsers(_serverIndex, new GroupDto(GroupFullInfo.Group)).Result;
+                            try
+                            {
+                                _bannedUsers = _getBannedUsersTask.Result;
+                            }
+                            catch
+                            {
+                                _bannedUsers = [];
+                            }
+                            _getBannedUsersTask = null;
+                        }
+
+                        using (ImRaii.Disabled(_getBannedUsersTask != null && !_getBannedUsersTask.IsCompleted))
+                        {
+                            if (_getBannedUsersTask != null && !_getBannedUsersTask.IsCompleted)
+                            {
+                                ImGui.TextUnformatted("Loading...");
+                            }
+                            else if (_uiSharedService.IconTextButton(FontAwesomeIcon.Retweet, "Refresh Banlist from Server"))
+                            {
+                                _getBannedUsersTask = _apiController.GroupGetBannedUsers(_serverIndex, new GroupDto(GroupFullInfo.Group));
+                            }
                         }
 
                         if (ImGui.BeginTable("bannedusertable" + GroupFullInfo.GID, 6, ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp, CalculateTableHeight(_bannedUsers.Count)))
@@ -466,11 +488,29 @@ public class SyncshellAdminUI : WindowMediatorSubscriberBase
                         ImGui.SetNextItemWidth(availableWidth - buttonSize - textSize - spacing * 2);
                         ImGui.InputTextWithHint("##changepw", "Min 10 characters", ref _newPassword, 50);
                         ImGui.SameLine();
-                        using (ImRaii.Disabled(_newPassword.Length < 10))
+
+                        if (_changePasswordTask != null && _changePasswordTask.IsCompleted)
                         {
-                            if (_uiSharedService.IconTextButton(FontAwesomeIcon.Passport, "Change Password"))
+                            try
                             {
-                                _pwChangeSuccess = _apiController.GroupChangePassword(_serverIndex, new GroupPasswordDto(GroupFullInfo.Group, _newPassword)).Result;
+                                _pwChangeSuccess = _changePasswordTask.Result;
+                            }
+                            catch
+                            {
+                                _pwChangeSuccess = false;
+                            }
+                            _changePasswordTask = null;
+                        }
+
+                        using (ImRaii.Disabled(_newPassword.Length < 10 || (_changePasswordTask != null && !_changePasswordTask.IsCompleted)))
+                        {
+                            if (_changePasswordTask != null && !_changePasswordTask.IsCompleted)
+                            {
+                                ImGui.TextUnformatted("Changing...");
+                            }
+                            else if (_uiSharedService.IconTextButton(FontAwesomeIcon.Passport, "Change Password"))
+                            {
+                                _changePasswordTask = _apiController.GroupChangePassword(_serverIndex, new GroupPasswordDto(GroupFullInfo.Group, _newPassword));
                                 _newPassword = string.Empty;
                             }
                         }

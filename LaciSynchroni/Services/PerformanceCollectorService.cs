@@ -1,4 +1,4 @@
-﻿using LaciSynchroni.SyncConfiguration;
+using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.Utils;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -179,11 +179,12 @@ public sealed class PerformanceCollectorService : IHostedService
         {
             await Task.Delay(TimeSpan.FromMinutes(10), _periodicLogPruneTaskCts.Token).ConfigureAwait(false);
 
-            foreach (var entries in PerformanceCounters.ToList())
+            foreach (var entries in PerformanceCounters)
             {
                 try
                 {
-                    var last = entries.Value.ToList().Last();
+                    var last = entries.Value.LastOrDefault();
+                    if (last == default) continue;
                     if (last.Item1.AddMinutes(10) < TimeOnly.FromDateTime(DateTime.Now) && !PerformanceCounters.TryRemove(entries.Key, out _))
                     {
                         _logger.LogDebug("Could not remove performance counter {counter}", entries.Key);

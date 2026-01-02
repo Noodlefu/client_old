@@ -336,11 +336,11 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
 
     private void Reset()
     {
-        _cancellationTokens.Values.ToList().ForEach(c =>
+        foreach (var c in _cancellationTokens.Values)
         {
             c.Cancel();
             c.Dispose();
-        });
+        }
         _cancellationTokens.Clear();
         _currentUploads.Clear();
         _verifiedUploadedHashesByServer.Clear();

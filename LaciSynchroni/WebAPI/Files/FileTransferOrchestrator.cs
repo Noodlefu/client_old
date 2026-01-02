@@ -1,4 +1,4 @@
-﻿using LaciSynchroni.Services.Mediator;
+using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.SyncConfiguration.Models;
 using LaciSynchroni.WebAPI.Files.Models;
@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Threading;
 
@@ -99,6 +100,41 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         }
     }
 
+    /// <summary>
+    /// Acquires a download slot and returns a lease that automatically releases it on dispose.
+    /// Use this with 'await using' to ensure slots are always released, even in error paths.
+    /// </summary>
+    public async Task<DownloadSlotLease> AcquireDownloadSlotAsync(CancellationToken token)
+    {
+        await WaitForDownloadSlotAsync(token).ConfigureAwait(false);
+        return new DownloadSlotLease(this);
+    }
+
+    /// <summary>
+    /// A lease that holds a download slot and releases it on dispose.
+    /// Ensures download slots are always released even in error paths.
+    /// </summary>
+    public sealed class DownloadSlotLease : IAsyncDisposable
+    {
+        private readonly FileTransferOrchestrator _orchestrator;
+        private bool _released;
+
+        internal DownloadSlotLease(FileTransferOrchestrator orchestrator)
+        {
+            _orchestrator = orchestrator;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (!_released)
+            {
+                _released = true;
+                _orchestrator.ReleaseDownloadSlot();
+            }
+            return ValueTask.CompletedTask;
+        }
+    }
+
     public async Task<HttpResponseMessage> SendRequestAsync(int serverIndex, HttpMethod method, Uri uri,
         CancellationToken? ct = null, HttpCompletionOption httpCompletionOption = HttpCompletionOption.ResponseContentRead, bool withAuthToken = true)
     {
@@ -162,6 +198,9 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         return Math.Clamp(dividedLimit, 1, long.MaxValue);
     }
 
+    private const int MaxTransientRetries = 2;
+    private const int TransientRetryDelayMs = 200;
+
     private async Task<HttpResponseMessage> SendRequestInternalAsync(ServerIndex serverIndex, HttpRequestMessage requestMessage,
         CancellationToken? ct = null, HttpCompletionOption httpCompletionOption = HttpCompletionOption.ResponseContentRead, bool withAuthToken = true)
     {
@@ -181,20 +220,77 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
             Logger.LogDebug("Sending {Method} to {Uri}", requestMessage.Method, requestMessage.RequestUri);
         }
 
-        try
+        Exception? lastException = null;
+
+        for (int attempt = 0; attempt <= MaxTransientRetries; attempt++)
         {
-            if (ct != null)
-                return await _httpClient.SendAsync(requestMessage, httpCompletionOption, ct.Value).ConfigureAwait(false);
-            return await _httpClient.SendAsync(requestMessage, httpCompletionOption).ConfigureAwait(false);
+            try
+            {
+                if (ct != null)
+                    return await _httpClient.SendAsync(requestMessage, httpCompletionOption, ct.Value).ConfigureAwait(false);
+                return await _httpClient.SendAsync(requestMessage, httpCompletionOption).ConfigureAwait(false);
+            }
+            catch (TaskCanceledException)
+            {
+                throw;
+            }
+            catch (HttpRequestException ex) when (IsTransientError(ex) && attempt < MaxTransientRetries)
+            {
+                lastException = ex;
+                Logger.LogWarning(ex, "Transient error during SendRequestInternal for {Uri}, retrying ({Attempt}/{MaxRetries})",
+                    requestMessage.RequestUri, attempt + 1, MaxTransientRetries);
+
+                try
+                {
+                    await Task.Delay(TransientRetryDelayMs, ct ?? CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (TaskCanceledException)
+                {
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Error during SendRequestInternal for {Uri}", requestMessage.RequestUri);
+                throw;
+            }
         }
-        catch (TaskCanceledException)
+
+        // All retries exhausted
+        Logger.LogError(lastException, "All retries exhausted for {Uri}", requestMessage.RequestUri);
+        throw lastException!;
+    }
+
+    /// <summary>
+    /// Determines if an HttpRequestException represents a transient error that should be retried.
+    /// </summary>
+    private static bool IsTransientError(HttpRequestException ex)
+    {
+        // Socket errors (connection reset, connection aborted, etc.)
+        if (ex.InnerException is SocketException socketEx)
         {
-            throw;
+            return socketEx.SocketErrorCode is
+                SocketError.ConnectionReset or
+                SocketError.ConnectionAborted or
+                SocketError.TimedOut or
+                SocketError.HostUnreachable or
+                SocketError.NetworkUnreachable or
+                SocketError.TryAgain;
         }
-        catch (Exception ex)
+
+        // IO exceptions (broken pipe, etc.)
+        if (ex.InnerException is IOException)
         {
-            Logger.LogWarning(ex, "Error during SendRequestInternal for {Uri}", requestMessage.RequestUri);
-            throw;
+            return true;
         }
+
+        // HTTP 5xx errors are typically transient
+        if (ex.StatusCode.HasValue)
+        {
+            var statusCode = (int)ex.StatusCode.Value;
+            return statusCode >= 500 && statusCode < 600;
+        }
+
+        return false;
     }
 }

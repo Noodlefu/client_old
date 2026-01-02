@@ -1,4 +1,4 @@
-﻿using Dalamud.Game.Gui.ContextMenu;
+using Dalamud.Game.Gui.ContextMenu;
 using Dalamud.Game.Text.SeStringHandling;
 using LaciSynchroni.Common.Data;
 using LaciSynchroni.Common.Data.Enum;
@@ -15,6 +15,11 @@ namespace LaciSynchroni.PlayerData.Pairs;
 
 public class Pair
 {
+    private static readonly SeString _openProfileSeString = new SeStringBuilder().AddText("Open Profile").Build();
+    private static readonly SeString _reapplyDataSeString = new SeStringBuilder().AddText("Reapply last data").Build();
+    private static readonly SeString _cyclePauseStateSeString = new SeStringBuilder().AddText("Cycle pause state").Build();
+    private static readonly SeString _changePermissionsSeString = new SeStringBuilder().AddText("Change Permissions").Build();
+
     private readonly PairHandlerFactory _cachedPlayerFactory;
     private readonly SemaphoreSlim _creationSemaphore = new(1);
     private readonly ILogger<Pair> _logger;
@@ -65,17 +70,9 @@ public class Pair
     {
         if (CachedPlayer == null || (args.Target is not MenuTargetDefault target) || target.TargetObjectId != CachedPlayer.PlayerCharacterId || IsPaused) return;
 
-        SeStringBuilder seStringBuilder = new();
-        SeStringBuilder seStringBuilder2 = new();
-        SeStringBuilder seStringBuilder3 = new();
-        SeStringBuilder seStringBuilder4 = new();
-        var openProfileSeString = seStringBuilder.AddText("Open Profile").Build();
-        var reapplyDataSeString = seStringBuilder2.AddText("Reapply last data").Build();
-        var cyclePauseState = seStringBuilder3.AddText("Cycle pause state").Build();
-        var changePermissions = seStringBuilder4.AddText("Change Permissions").Build();
         args.AddMenuItem(new MenuItem()
         {
-            Name = openProfileSeString,
+            Name = _openProfileSeString,
             OnClicked = (a) => _mediator.Publish(new ProfileOpenStandaloneMessage(this)),
             UseDefaultPrefix = false,
             PrefixChar = 'M',
@@ -84,7 +81,7 @@ public class Pair
 
         args.AddMenuItem(new MenuItem()
         {
-            Name = reapplyDataSeString,
+            Name = _reapplyDataSeString,
             OnClicked = (a) => ApplyLastReceivedData(forced: true),
             UseDefaultPrefix = false,
             PrefixChar = 'M',
@@ -93,7 +90,7 @@ public class Pair
 
         args.AddMenuItem(new MenuItem()
         {
-            Name = changePermissions,
+            Name = _changePermissionsSeString,
             OnClicked = (a) => _mediator.Publish(new OpenPermissionWindow(this)),
             UseDefaultPrefix = false,
             PrefixChar = 'M',
@@ -102,7 +99,7 @@ public class Pair
 
         args.AddMenuItem(new MenuItem()
         {
-            Name = cyclePauseState,
+            Name = _cyclePauseStateSeString,
             OnClicked = (a) => _mediator.Publish(new CyclePauseMessage(ServerIndex, UserData)),
             UseDefaultPrefix = false,
             PrefixChar = 'M',
@@ -254,18 +251,11 @@ public class Pair
                 disableIndividualAnimations, disableIndividualSounds, disableIndividualVFX);
             foreach (var objectKind in data.FileReplacements.Select(k => k.Key))
             {
-                if (disableIndividualSounds)
-                    data.FileReplacements[objectKind] = data.FileReplacements[objectKind]
-                        .Where(f => !f.GamePaths.Any(p => p.EndsWith("scd", StringComparison.OrdinalIgnoreCase)))
-                        .ToList();
-                if (disableIndividualAnimations)
-                    data.FileReplacements[objectKind] = data.FileReplacements[objectKind]
-                        .Where(f => !f.GamePaths.Any(p => p.EndsWith("tmb", StringComparison.OrdinalIgnoreCase) || p.EndsWith("pap", StringComparison.OrdinalIgnoreCase)))
-                        .ToList();
-                if (disableIndividualVFX)
-                    data.FileReplacements[objectKind] = data.FileReplacements[objectKind]
-                        .Where(f => !f.GamePaths.Any(p => p.EndsWith("atex", StringComparison.OrdinalIgnoreCase) || p.EndsWith("avfx", StringComparison.OrdinalIgnoreCase)))
-                        .ToList();
+                data.FileReplacements[objectKind] = data.FileReplacements[objectKind]
+                    .Where(f => (!disableIndividualSounds || !f.GamePaths.Any(p => p.EndsWith("scd", StringComparison.OrdinalIgnoreCase)))
+                        && (!disableIndividualAnimations || !f.GamePaths.Any(p => p.EndsWith("tmb", StringComparison.OrdinalIgnoreCase) || p.EndsWith("pap", StringComparison.OrdinalIgnoreCase)))
+                        && (!disableIndividualVFX || !f.GamePaths.Any(p => p.EndsWith("atex", StringComparison.OrdinalIgnoreCase) || p.EndsWith("avfx", StringComparison.OrdinalIgnoreCase))))
+                    .ToList();
             }
         }
 

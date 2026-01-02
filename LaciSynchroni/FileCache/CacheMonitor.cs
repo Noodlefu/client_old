@@ -448,10 +448,13 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
 
     public void ResumeScan(string source)
     {
-        if (!HaltScanLocks.ContainsKey(source)) HaltScanLocks[source] = 0;
+        if (!HaltScanLocks.TryGetValue(source, out var count))
+        {
+            HaltScanLocks[source] = 0;
+            return;
+        }
 
-        HaltScanLocks[source]--;
-        if (HaltScanLocks[source] < 0) HaltScanLocks[source] = 0;
+        HaltScanLocks[source] = Math.Max(0, count - 1);
     }
 
     protected override void Dispose(bool disposing)
