@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LaciSynchroni.Interop.Ipc;
 
-public sealed class IpcCallerPetNames : IIpcCaller
+public sealed class IpcCallerPetNames : IDisposable
 {
     private readonly ILogger<IpcCallerPetNames> _logger;
     private readonly DalamudUtilService _dalamudUtil;

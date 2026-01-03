@@ -9,7 +9,7 @@ using System.Text;
 
 namespace LaciSynchroni.Interop.Ipc;
 
-public sealed class IpcCallerCustomize : IIpcCaller
+public sealed class IpcCallerCustomize : IDisposable
 {
     private readonly ICallGateSubscriber<(int, int)> _customizePlusApiVersion;
     private readonly ICallGateSubscriber<ushort, (int, Guid?)> _customizePlusGetActiveProfile;

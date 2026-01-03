@@ -10,7 +10,7 @@ using System.Text.Json.Nodes;
 
 namespace LaciSynchroni.Interop.Ipc;
 
-public sealed class IpcCallerBrio : IIpcCaller
+public sealed class IpcCallerBrio : IDisposable
 {
     private readonly ILogger<IpcCallerBrio> _logger;
     private readonly DalamudUtilService _dalamudUtilService;

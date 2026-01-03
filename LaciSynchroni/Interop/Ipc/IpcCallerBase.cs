@@ -10,7 +10,7 @@ namespace LaciSynchroni.Interop.Ipc;
 /// Base class for IPC callers that communicate with other Dalamud plugins.
 /// Provides common functionality for API availability checking and error handling.
 /// </summary>
-public abstract class IpcCallerBase : DisposableMediatorSubscriberBase, IIpcCaller
+public abstract class IpcCallerBase : DisposableMediatorSubscriberBase
 {
     protected readonly IDalamudPluginInterface PluginInterface;
     protected readonly DalamudUtilService DalamudUtil;
