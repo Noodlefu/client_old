@@ -27,6 +27,11 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
     private SemaphoreSlim _downloadSemaphore;
     private int CurrentlyUsedDownloadSlots => _availableDownloadSlots - _downloadSemaphore.CurrentCount;
 
+    /// <summary>
+    /// The configured number of parallel download slots.
+    /// </summary>
+    public int AvailableDownloadSlots => _availableDownloadSlots;
+
     public HttpRequestHeaders DefaultRequestHeaders => _httpClient.DefaultRequestHeaders;
 
     public FileTransferOrchestrator(ILogger<FileTransferOrchestrator> logger, SyncConfigService syncConfig,
@@ -58,13 +63,68 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         });
     }
 
-    private readonly ConcurrentDictionary<string, FileTransfer> _forbiddenTransfers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (FileTransfer Transfer, DateTime AddedAt)> _forbiddenTransfers = new(StringComparer.Ordinal);
 
-    public List<FileTransfer> ForbiddenTransfers => _forbiddenTransfers.Values.ToList();
+    /// <summary>Maximum age of forbidden transfer entries before cleanup.</summary>
+    private static readonly TimeSpan ForbiddenTransferMaxAge = TimeSpan.FromHours(1);
+    /// <summary>Maximum number of forbidden transfer entries to keep.</summary>
+    private const int ForbiddenTransferMaxCount = 1000;
+
+    public List<FileTransfer> ForbiddenTransfers => _forbiddenTransfers.Values.Select(v => v.Transfer).ToList();
 
     public bool IsForbidden(string hash) => _forbiddenTransfers.ContainsKey(hash);
 
-    public bool TryAddForbiddenTransfer(FileTransfer transfer) => _forbiddenTransfers.TryAdd(transfer.Hash, transfer);
+    public bool TryAddForbiddenTransfer(FileTransfer transfer)
+    {
+        var result = _forbiddenTransfers.TryAdd(transfer.Hash, (transfer, DateTime.UtcNow));
+
+        // Periodically cleanup old entries when adding new ones
+        if (result && _forbiddenTransfers.Count > ForbiddenTransferMaxCount)
+        {
+            CleanupForbiddenTransfers();
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Removes expired forbidden transfer entries and trims to max count if needed.
+    /// </summary>
+    private void CleanupForbiddenTransfers()
+    {
+        var cutoff = DateTime.UtcNow - ForbiddenTransferMaxAge;
+        var expiredKeys = _forbiddenTransfers
+            .Where(kvp => kvp.Value.AddedAt < cutoff)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in expiredKeys)
+        {
+            _forbiddenTransfers.TryRemove(key, out _);
+        }
+
+        // If still over limit, remove oldest entries
+        if (_forbiddenTransfers.Count > ForbiddenTransferMaxCount)
+        {
+            var toRemove = _forbiddenTransfers
+                .OrderBy(kvp => kvp.Value.AddedAt)
+                .Take(_forbiddenTransfers.Count - ForbiddenTransferMaxCount)
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var key in toRemove)
+            {
+                _forbiddenTransfers.TryRemove(key, out _);
+            }
+        }
+
+        Logger.LogDebug("Cleaned up forbidden transfers, remaining: {Count}", _forbiddenTransfers.Count);
+    }
+
+    /// <summary>
+    /// Clears all forbidden transfer entries.
+    /// </summary>
+    public void ClearForbiddenTransfers() => _forbiddenTransfers.Clear();
 
     public Uri? GetFileCdnUri(int serverIndex)
     {
@@ -163,15 +223,66 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
     {
         lock (_semaphoreModificationLock)
         {
-            if (_availableDownloadSlots != _syncConfig.Current.ParallelDownloads && _availableDownloadSlots == _downloadSemaphore.CurrentCount)
+            var configuredSlots = _syncConfig.Current.ParallelDownloads;
+            if (_availableDownloadSlots != configuredSlots)
             {
-                _availableDownloadSlots = _syncConfig.Current.ParallelDownloads;
-                _downloadSemaphore = new(_availableDownloadSlots, _availableDownloadSlots);
+                AdjustSemaphoreCapacity(configuredSlots);
             }
         }
 
         await _downloadSemaphore.WaitAsync(token).ConfigureAwait(false);
         Mediator.Publish(new DownloadLimitChangedMessage());
+    }
+
+    /// <summary>
+    /// Adjusts semaphore capacity gracefully without waiting for all slots to be free.
+    /// Must be called while holding _semaphoreModificationLock.
+    /// </summary>
+    private void AdjustSemaphoreCapacity(int newCapacity)
+    {
+        var oldCapacity = _availableDownloadSlots;
+        var currentFreeSlots = _downloadSemaphore.CurrentCount;
+        var currentlyInUse = oldCapacity - currentFreeSlots;
+
+        if (newCapacity == oldCapacity) return;
+
+        Logger.LogDebug("Adjusting download slots from {Old} to {New} (currently in use: {InUse})",
+            oldCapacity, newCapacity, currentlyInUse);
+
+        if (newCapacity > oldCapacity)
+        {
+            // Increasing capacity: release additional slots on current semaphore
+            var additionalSlots = newCapacity - oldCapacity;
+            try
+            {
+                _downloadSemaphore.Release(additionalSlots);
+            }
+            catch (SemaphoreFullException)
+            {
+                // This shouldn't happen but handle it gracefully
+                Logger.LogWarning("SemaphoreFullException when trying to increase capacity");
+            }
+            _availableDownloadSlots = newCapacity;
+        }
+        else
+        {
+            // Decreasing capacity: create new semaphore with reduced capacity
+            // New semaphore starts with (newCapacity - currentlyInUse) free slots
+            // If more slots are in use than the new capacity, start with 0 free slots
+            var newFreeSlots = Math.Max(0, newCapacity - currentlyInUse);
+            var newSemaphore = new SemaphoreSlim(newFreeSlots, newCapacity);
+
+            // Swap the semaphore - existing waiters on old semaphore will still get their slots
+            // as they complete, but new waiters will use the new semaphore
+            var oldSemaphore = _downloadSemaphore;
+            _downloadSemaphore = newSemaphore;
+            _availableDownloadSlots = newCapacity;
+
+            // Note: We don't dispose the old semaphore immediately because there may be
+            // active waiters. It will be garbage collected when all references are released.
+            // This is safe because SemaphoreSlim doesn't hold unmanaged resources when
+            // AvailableWaitHandle is not accessed.
+        }
     }
 
     public long DownloadLimitPerSlot()

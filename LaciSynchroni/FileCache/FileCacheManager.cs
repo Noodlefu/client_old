@@ -425,9 +425,66 @@ public sealed class FileCacheManager : IHostedService
         return fileCache;
     }
 
+    /// <summary>
+    /// Cleans up orphaned temporary files from previous sessions.
+    /// These files (.blk, .bin) are created during downloads and may be left behind if the process crashes.
+    /// </summary>
+    private void CleanupOrphanedTempFiles()
+    {
+        try
+        {
+            var cacheFolder = _configService.Current.CacheFolder;
+            if (string.IsNullOrEmpty(cacheFolder) || !Directory.Exists(cacheFolder))
+            {
+                return;
+            }
+
+            var tempExtensions = new[] { "*.blk", "*.bin" };
+            var cleanedCount = 0;
+            long cleanedBytes = 0;
+
+            foreach (var pattern in tempExtensions)
+            {
+                try
+                {
+                    foreach (var file in Directory.EnumerateFiles(cacheFolder, pattern, SearchOption.TopDirectoryOnly))
+                    {
+                        try
+                        {
+                            var fi = new FileInfo(file);
+                            cleanedBytes += fi.Length;
+                            fi.Delete();
+                            cleanedCount++;
+                            _logger.LogDebug("Cleaned up orphaned temp file: {File}", file);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to delete orphaned temp file: {File}", file);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to enumerate temp files with pattern {Pattern}", pattern);
+                }
+            }
+
+            if (cleanedCount > 0)
+            {
+                _logger.LogInformation("Cleaned up {Count} orphaned temp files ({Size} bytes)", cleanedCount, cleanedBytes);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to cleanup orphaned temp files");
+        }
+    }
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting FileCacheManager");
+
+        CleanupOrphanedTempFiles();
 
         lock (_fileWriteLock)
         {

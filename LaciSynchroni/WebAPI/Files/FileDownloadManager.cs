@@ -20,6 +20,19 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     private const int MaxRetryAttempts = 3;
     private static readonly TimeSpan[] RetryDelays = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)];
 
+    /// <summary>XOR key used for data munging/obfuscation.</summary>
+    private const byte MungeXorKey = 42;
+    /// <summary>Buffer size for small downloads (under 1MB).</summary>
+    private const int SmallDownloadBufferSize = 8196;
+    /// <summary>Buffer size for large downloads (1MB or more).</summary>
+    private const int LargeDownloadBufferSize = 65536;
+    /// <summary>Threshold in bytes above which large buffer is used.</summary>
+    private const long LargeDownloadThreshold = 1024 * 1024;
+    /// <summary>Timeout for polling download ready status.</summary>
+    private static readonly TimeSpan DownloadReadyPollTimeout = TimeSpan.FromSeconds(5);
+    /// <summary>Delay between download ready polls.</summary>
+    private static readonly TimeSpan DownloadReadyPollInterval = TimeSpan.FromMilliseconds(250);
+
     private readonly Dictionary<string, FileDownloadStatus> _downloadStatus;
     private readonly Lock _downloadStatusLock = new();
     private readonly FileCompactor _fileCompactor;
@@ -73,7 +86,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     {
         for (int i = 0; i < buffer.Length; ++i)
         {
-            buffer[i] ^= 42;
+            buffer[i] ^= MungeXorKey;
         }
     }
 
@@ -162,7 +175,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             throw new EndOfStreamException();
         }
 
-        return (byte)(byteOrEof ^ 42);
+        return (byte)(byteOrEof ^ MungeXorKey);
     }
 
     private static (string fileHash, long fileLengthBytes) ReadBlockFileHeader(FileStream fileBlockStream)
@@ -268,7 +281,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             var fileStream = File.Create(tempPath);
             await using (fileStream.ConfigureAwait(false))
             {
-                var bufferSize = response.Content.Headers.ContentLength > 1024 * 1024 ? 65536 : 8196;
+                var bufferSize = response.Content.Headers.ContentLength > LargeDownloadThreshold ? LargeDownloadBufferSize : SmallDownloadBufferSize;
                 var buffer = new byte[bufferSize];
 
                 var bytesRead = 0;
@@ -346,6 +359,96 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         return CurrentDownloads;
     }
 
+    /// <summary>
+    /// Extracts and decompresses files from a downloaded block file.
+    /// </summary>
+    private async Task ExtractBlockFile(string blockFile, List<FileReplacementData> fileReplacement, string downloadName)
+    {
+        FileStream? fileBlockStream = null;
+        try
+        {
+            fileBlockStream = File.OpenRead(blockFile);
+            while (fileBlockStream.Position < fileBlockStream.Length)
+            {
+                (string fileHash, long fileLengthBytes) = ReadBlockFileHeader(fileBlockStream);
+
+                try
+                {
+                    var fileExtension = fileReplacement.First(f => string.Equals(f.Hash, fileHash, StringComparison.OrdinalIgnoreCase)).GamePaths[0].Split(".")[^1];
+                    var filePath = _fileDbManager.GetCacheFilePath(fileHash, fileExtension);
+                    Logger.LogDebug("{dlName}: Decompressing {file}:{le} => {dest}", downloadName, fileHash, fileLengthBytes, filePath);
+
+                    byte[] compressedFileContent = new byte[fileLengthBytes];
+                    var readBytes = await fileBlockStream.ReadAsync(compressedFileContent, CancellationToken.None).ConfigureAwait(false);
+                    if (readBytes != fileLengthBytes)
+                    {
+                        throw new EndOfStreamException();
+                    }
+                    MungeBuffer(compressedFileContent);
+
+                    await DecompressAndWriteFile(fileHash, filePath, compressedFileContent, downloadName).ConfigureAwait(false);
+                }
+                catch (EndOfStreamException)
+                {
+                    Logger.LogWarning("{dlName}: Failure to extract file {fileHash}, stream ended prematurely", downloadName, fileHash);
+                }
+                catch (Exception e)
+                {
+                    Logger.LogWarning(e, "{dlName}: Error during decompression", downloadName);
+                }
+            }
+        }
+        catch (EndOfStreamException)
+        {
+            Logger.LogDebug("{dlName}: Failure to extract file header data, stream ended", downloadName);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "{dlName}: Error during block file read", downloadName);
+        }
+        finally
+        {
+            if (fileBlockStream != null)
+                await fileBlockStream.DisposeAsync().ConfigureAwait(false);
+            File.Delete(blockFile);
+        }
+    }
+
+    /// <summary>
+    /// Decompresses data and writes it to a file, with proper gating to prevent CPU exhaustion.
+    /// </summary>
+    private async Task DecompressAndWriteFile(string fileHash, string filePath, byte[] compressedData, string downloadName)
+    {
+        // Gate decompression to prevent CPU exhaustion
+        // Decompression is completed fully before releasing the gate to ensure
+        // we don't lose decompressed data if file write fails
+        byte[] decompressedFile;
+        await _decompressGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            decompressedFile = LZ4Wrapper.Unwrap(compressedData);
+        }
+        finally
+        {
+            _decompressGate.Release();
+        }
+
+        // Write decompressed file outside of the gate to not block other decompressions
+        try
+        {
+            await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception writeEx)
+        {
+            Logger.LogWarning(writeEx, "{dlName}: Failed to write decompressed file {fileHash} to {filePath}", downloadName, fileHash, filePath);
+            // Clean up partial file if it exists
+            try { File.Delete(filePath); } catch { /* ignore cleanup errors */ }
+            throw;
+        }
+
+        PersistFileToStorage(fileHash, filePath);
+    }
+
     private async Task DownloadFilesInternal(int serverIndex, GameObjectHandler gameObjectHandler, List<FileReplacementData> fileReplacement, CancellationToken ct)
     {
         var downloadGroups = CurrentDownloads.Where(p => !p.IsDirectDownload).GroupBy(f => f.DownloadUri.Host + ":" + f.DownloadUri.Port, StringComparer.Ordinal);
@@ -372,7 +475,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
         await Parallel.ForEachAsync(downloadGroups, new ParallelOptions()
         {
-            MaxDegreeOfParallelism = downloadGroups.Count(),
+            MaxDegreeOfParallelism = Math.Min(downloadGroups.Count(), _orchestrator.AvailableDownloadSlots),
             CancellationToken = ct,
         },
         async (fileGroup, token) =>
@@ -422,83 +525,9 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 return;
             }
 
-            FileStream? fileBlockStream = null;
-            try
-            {
-                SetTransferredFiles(fileGroup.Key, 1);
-                SetDownloadStatus(fileGroup.Key, DownloadStatus.Decompressing);
-                fileBlockStream = File.OpenRead(blockFile);
-                while (fileBlockStream.Position < fileBlockStream.Length)
-                {
-                    (string fileHash, long fileLengthBytes) = ReadBlockFileHeader(fileBlockStream);
-
-                    try
-                    {
-                        var fileExtension = fileReplacement.First(f => string.Equals(f.Hash, fileHash, StringComparison.OrdinalIgnoreCase)).GamePaths[0].Split(".")[^1];
-                        var filePath = _fileDbManager.GetCacheFilePath(fileHash, fileExtension);
-                        Logger.LogDebug("{dlName}: Decompressing {file}:{le} => {dest}", fi.Name, fileHash, fileLengthBytes, filePath);
-
-                        byte[] compressedFileContent = new byte[fileLengthBytes];
-                        var readBytes = await fileBlockStream.ReadAsync(compressedFileContent, CancellationToken.None).ConfigureAwait(false);
-                        if (readBytes != fileLengthBytes)
-                        {
-                            throw new EndOfStreamException();
-                        }
-                        MungeBuffer(compressedFileContent);
-
-                        // Gate decompression to prevent CPU exhaustion
-                        // Decompression is completed fully before releasing the gate to ensure
-                        // we don't lose decompressed data if file write fails
-                        byte[] decompressedFile;
-                        await _decompressGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-                        try
-                        {
-                            decompressedFile = LZ4Wrapper.Unwrap(compressedFileContent);
-                        }
-                        finally
-                        {
-                            _decompressGate.Release();
-                        }
-
-                        // Write decompressed file outside of the gate to not block other decompressions
-                        try
-                        {
-                            await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, CancellationToken.None).ConfigureAwait(false);
-                        }
-                        catch (Exception writeEx)
-                        {
-                            Logger.LogWarning(writeEx, "{dlName}: Failed to write decompressed file {fileHash} to {filePath}", fi.Name, fileHash, filePath);
-                            // Clean up partial file if it exists
-                            try { File.Delete(filePath); } catch { /* ignore cleanup errors */ }
-                            throw;
-                        }
-
-                        PersistFileToStorage(fileHash, filePath);
-                    }
-                    catch (EndOfStreamException)
-                    {
-                        Logger.LogWarning("{dlName}: Failure to extract file {fileHash}, stream ended prematurely", fi.Name, fileHash);
-                    }
-                    catch (Exception e)
-                    {
-                        Logger.LogWarning(e, "{dlName}: Error during decompression", fi.Name);
-                    }
-                }
-            }
-            catch (EndOfStreamException)
-            {
-                Logger.LogDebug("{dlName}: Failure to extract file header data, stream ended", fi.Name);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "{dlName}: Error during block file read", fi.Name);
-            }
-            finally
-            {
-                if (fileBlockStream != null)
-                    await fileBlockStream.DisposeAsync().ConfigureAwait(false);
-                File.Delete(blockFile);
-            }
+            SetTransferredFiles(fileGroup.Key, 1);
+            SetDownloadStatus(fileGroup.Key, DownloadStatus.Decompressing);
+            await ExtractBlockFile(blockFile, fileReplacement, fi.Name).ConfigureAwait(false);
         }).ConfigureAwait(false);
 
         Logger.LogDebug("Download end: {id}", gameObjectHandler);
@@ -535,7 +564,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         // Start downloading each of the direct downloads
         var directDownloadsTask = directDownloads.Count == 0 ? Task.CompletedTask : Parallel.ForEachAsync(directDownloads, new ParallelOptions()
         {
-            MaxDegreeOfParallelism = directDownloads.Count,
+            MaxDegreeOfParallelism = Math.Min(directDownloads.Count, _orchestrator.AvailableDownloadSlots),
             CancellationToken = ct,
         },
         async (directDownload, token) =>
@@ -599,34 +628,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 Logger.LogDebug("Decompressing direct download {Hash} from {CompressedFile} to {FinalFile}", directDownload.Hash, tempFilename, finalFilename);
                 byte[] compressedBytes = await File.ReadAllBytesAsync(tempFilename).ConfigureAwait(false);
 
-                // Gate decompression to prevent CPU exhaustion
-                // Decompression is completed fully before releasing the gate to ensure
-                // we don't lose decompressed data if file write fails
-                byte[] decompressedBytes;
-                await _decompressGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-                try
-                {
-                    decompressedBytes = LZ4Wrapper.Unwrap(compressedBytes);
-                }
-                finally
-                {
-                    _decompressGate.Release();
-                }
-
-                // Write decompressed file outside of the gate to not block other decompressions
-                try
-                {
-                    await _fileCompactor.WriteAllBytesAsync(finalFilename, decompressedBytes, CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception writeEx)
-                {
-                    Logger.LogWarning(writeEx, "{Hash}: Failed to write decompressed file to {FinalFilename}", directDownload.Hash, finalFilename);
-                    // Clean up partial file if it exists
-                    try { File.Delete(finalFilename); } catch { /* ignore cleanup errors */ }
-                    throw;
-                }
-
-                PersistFileToStorage(directDownload.Hash, finalFilename);
+                await DecompressAndWriteFile(directDownload.Hash, finalFilename, compressedBytes, "DirectDownload").ConfigureAwait(false);
                 Logger.LogDebug("Finished direct download of {Hash}.", directDownload.Hash);
             }
             catch (Exception ex)
@@ -762,7 +764,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             var fileStream = File.Create(destinationFilename);
             await using (fileStream.ConfigureAwait(false))
             {
-                var bufferSize = response.Content.Headers.ContentLength > 1024 * 1024 ? 65536 : 8196;
+                var bufferSize = response.Content.Headers.ContentLength > LargeDownloadThreshold ? LargeDownloadBufferSize : SmallDownloadBufferSize;
                 var buffer = new byte[bufferSize];
 
                 var bytesRead = 0;
@@ -875,14 +877,14 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         try
         {
             CancellationTokenSource localTimeoutCts = new();
-            localTimeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+            localTimeoutCts.CancelAfter(DownloadReadyPollTimeout);
             CancellationTokenSource composite = CancellationTokenSource.CreateLinkedTokenSource(downloadCt, localTimeoutCts.Token);
 
             while (!_orchestrator.IsDownloadReady(requestId))
             {
                 try
                 {
-                    await Task.Delay(250, composite.Token).ConfigureAwait(false);
+                    await Task.Delay(DownloadReadyPollInterval, composite.Token).ConfigureAwait(false);
                 }
                 catch (TaskCanceledException)
                 {
@@ -894,7 +896,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     localTimeoutCts.Dispose();
                     composite.Dispose();
                     localTimeoutCts = new();
-                    localTimeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+                    localTimeoutCts.CancelAfter(DownloadReadyPollTimeout);
                     composite = CancellationTokenSource.CreateLinkedTokenSource(downloadCt, localTimeoutCts.Token);
                 }
             }

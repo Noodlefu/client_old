@@ -11,13 +11,29 @@ using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Threading.Channels;
 
 namespace LaciSynchroni.WebAPI.Files;
 
 using ServerIndex = int;
 
+/// <summary>
+/// Represents a compressed file ready for upload.
+/// </summary>
+internal sealed record CompressedUploadItem(string Hash, byte[] Data);
+
 public sealed class FileUploadManager : DisposableMediatorSubscriberBase
 {
+    /// <summary>
+    /// Number of files to compress ahead of uploads (pipeline depth).
+    /// </summary>
+    private const int CompressionPipelineDepth = 2;
+
+    /// <summary>
+    /// Duration after which a verified upload hash expires and needs re-verification.
+    /// </summary>
+    private static readonly TimeSpan VerifiedHashExpiration = TimeSpan.FromMinutes(10);
+
     private readonly FileCacheManager _fileDbManager;
     private readonly SyncConfigService _syncConfigService;
     private readonly FileTransferOrchestrator _orchestrator;
@@ -93,22 +109,68 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
             return [.. filesToUpload.Where(f => f.IsForbidden).Select(f => f.Hash)];
         }
 
-        Task uploadTask = Task.CompletedTask;
-        int i = 1;
-        foreach (var file in filesToUpload)
-        {
-            progress.Report($"Uploading file {i++}/{filesToUpload.Count}. Please wait until the upload is completed.");
-            Logger.LogDebug("[{hash}] Compressing", file);
-            var data = await _fileDbManager.GetCompressedFileData(file.Hash, ct).ConfigureAwait(false);
-            Logger.LogDebug("[{hash}] Starting upload for {filePath}", data.Item1, _fileDbManager.GetFileCacheByHash(data.Item1)!.ResolvedFilepath);
-            await uploadTask.ConfigureAwait(false);
-            uploadTask = UploadFile(serverIndex, data.Item2, file.Hash, false, ct);
-            ct.ThrowIfCancellationRequested();
-        }
-
-        await uploadTask.ConfigureAwait(false);
+        await UploadFilesWithPipeline(serverIndex, filesToUpload, progress, false, ct).ConfigureAwait(false);
 
         return [];
+    }
+
+    /// <summary>
+    /// Uploads files using a producer-consumer pipeline where compression runs ahead of uploads.
+    /// </summary>
+    private async Task UploadFilesWithPipeline(int serverIndex, List<UploadFileDto> filesToUpload, IProgress<string>? progress, bool postProgress, CancellationToken ct)
+    {
+        if (filesToUpload.Count == 0) return;
+
+        var channel = Channel.CreateBounded<CompressedUploadItem>(new BoundedChannelOptions(CompressionPipelineDepth)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = true
+        });
+
+        var uploadCount = filesToUpload.Count;
+        var uploadedCount = 0;
+
+        // Producer: compress files and write to channel
+        var producerTask = Task.Run(async () =>
+        {
+            try
+            {
+                foreach (var file in filesToUpload)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    Logger.LogDebug("[{hash}] Compressing (pipeline)", file.Hash);
+                    var data = await _fileDbManager.GetCompressedFileData(file.Hash, ct).ConfigureAwait(false);
+
+                    var serverUploads = GetServerUploads(serverIndex);
+                    if (serverUploads.TryGetValue(data.Item1, out var uploadTransfer))
+                    {
+                        uploadTransfer.Total = data.Item2.Length;
+                    }
+
+                    await channel.Writer.WriteAsync(new CompressedUploadItem(data.Item1, data.Item2), ct).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                channel.Writer.Complete();
+            }
+        }, ct);
+
+        // Consumer: read compressed items and upload
+        var consumerTask = Task.Run(async () =>
+        {
+            await foreach (var item in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            {
+                uploadedCount++;
+                progress?.Report($"Uploading file {uploadedCount}/{uploadCount}. Please wait until the upload is completed.");
+
+                Logger.LogDebug("[{hash}] Starting upload for {filePath}", item.Hash, _fileDbManager.GetFileCacheByHash(item.Hash)?.ResolvedFilepath ?? "unknown");
+                await UploadFile(serverIndex, item.Data, item.Hash, postProgress, ct).ConfigureAwait(false);
+            }
+        }, ct);
+
+        await Task.WhenAll(producerTask, consumerTask).ConfigureAwait(false);
     }
 
     public async Task<CharacterData> UploadFiles(ServerIndex serverIndex, CharacterData data, List<UserData> visiblePlayers)
@@ -162,7 +224,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
                 verifiedTime = DateTime.MinValue;
             }
 
-            if (verifiedTime < DateTime.UtcNow.Subtract(TimeSpan.FromMinutes(10)))
+            if (verifiedTime < DateTime.UtcNow.Subtract(VerifiedHashExpiration))
             {
                 Logger.LogTrace("Verifying {item}, last verified: {date}", item, verifiedTime);
                 unverifiedUploadHashes.Add(item);
@@ -274,25 +336,17 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         }
 
         var totalSize = serverUploads.Values.Sum(c => c.Total);
-        Logger.LogDebug("Compressing and uploading files");
-        Task uploadTask = Task.CompletedTask;
-        foreach (var file in serverUploads.Values.Where(f => f.CanBeTransferred && !f.IsTransferred).ToList())
-        {
-            Logger.LogDebug("[{hash}] Compressing", file);
-            var data = await _fileDbManager.GetCompressedFileData(file.Hash, uploadToken).ConfigureAwait(false);
-            if (serverUploads.TryGetValue(data.Item1, out var uploadTransfer))
-            {
-                uploadTransfer.Total = data.Item2.Length;
-            }
-            Logger.LogDebug("[{hash}] Starting upload for {filePath}", data.Item1, _fileDbManager.GetFileCacheByHash(data.Item1)!.ResolvedFilepath);
-            await uploadTask.ConfigureAwait(false);
-            uploadTask = UploadFile(serverIndex, data.Item2, file.Hash, true, uploadToken);
-            uploadToken.ThrowIfCancellationRequested();
-        }
+        Logger.LogDebug("Compressing and uploading files using pipeline");
 
-        if (serverUploads.Count > 0)
+        // Get files that need to be uploaded
+        var filesToProcess = serverUploads.Values
+            .Where(f => f.CanBeTransferred && !f.IsTransferred)
+            .Select(f => new UploadFileDto { Hash = f.Hash })
+            .ToList();
+
+        if (filesToProcess.Count > 0)
         {
-            await uploadTask.ConfigureAwait(false);
+            await UploadFilesWithPipeline(serverIndex, filesToProcess, null, true, uploadToken).ConfigureAwait(false);
 
             var compressedSize = serverUploads.Values.Sum(c => c.Total);
             var serverName = _serverManager.GetServerByIndex(serverIndex).ServerName;
