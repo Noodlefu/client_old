@@ -9,4 +9,5 @@
   <Project Path="LaciSynchroni/LaciSynchroni.csproj">
     <Platform Project="x64" />
   </Project>
+  <Project Path="LaciSynchroni.Tests/LaciSynchroni.Tests.csproj" />
 </Solution>
