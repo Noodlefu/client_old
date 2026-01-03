@@ -238,16 +238,18 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IContextMenu contextMenu)
     {
+        services.AddSingleton<ConcurrentPairLockService>();
         services.AddSingleton(s => new PairManager(
             s.GetRequiredService<ILogger<PairManager>>(),
             s.GetRequiredService<PairFactory>(),
             s.GetRequiredService<SyncConfigService>(),
             s.GetRequiredService<SyncMediator>(),
-            contextMenu));
+            contextMenu,
+            s.GetRequiredService<ServerConfigurationManager>(),
+            s.GetRequiredService<ConcurrentPairLockService>()));
 
         services.AddSingleton<ProfileManager>();
         services.AddSingleton<MultiConnectTokenService>();
-        services.AddSingleton<ConcurrentPairLockService>();
         services.AddSingleton<PlayerPerformanceService>();
 
         services.AddScoped<CacheCreationService>();

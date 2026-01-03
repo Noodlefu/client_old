@@ -1,5 +1,3 @@
-using Dalamud.Game.Gui.ContextMenu;
-using Dalamud.Game.Text.SeStringHandling;
 using LaciSynchroni.Common.Data;
 using LaciSynchroni.Common.Data.Enum;
 using LaciSynchroni.Common.Data.Extensions;
@@ -15,11 +13,6 @@ namespace LaciSynchroni.PlayerData.Pairs;
 
 public class Pair
 {
-    private static readonly SeString _openProfileSeString = new SeStringBuilder().AddText("Open Profile").Build();
-    private static readonly SeString _reapplyDataSeString = new SeStringBuilder().AddText("Reapply last data").Build();
-    private static readonly SeString _cyclePauseStateSeString = new SeStringBuilder().AddText("Cycle pause state").Build();
-    private static readonly SeString _changePermissionsSeString = new SeStringBuilder().AddText("Change Permissions").Build();
-
     private readonly PairHandlerFactory _cachedPlayerFactory;
     private readonly SemaphoreSlim _creationSemaphore = new(1);
     private readonly ILogger<Pair> _logger;
@@ -66,46 +59,10 @@ public class Pair
     public UserFullPairDto UserPair { get; set; }
     private PairHandler? CachedPlayer { get; set; }
 
-    public void AddContextMenu(IMenuOpenedArgs args)
-    {
-        if (CachedPlayer == null || (args.Target is not MenuTargetDefault target) || target.TargetObjectId != CachedPlayer.PlayerCharacterId || IsPaused) return;
-
-        args.AddMenuItem(new MenuItem()
-        {
-            Name = _openProfileSeString,
-            OnClicked = (a) => _mediator.Publish(new ProfileOpenStandaloneMessage(this)),
-            UseDefaultPrefix = false,
-            PrefixChar = 'M',
-            PrefixColor = 526
-        });
-
-        args.AddMenuItem(new MenuItem()
-        {
-            Name = _reapplyDataSeString,
-            OnClicked = (a) => ApplyLastReceivedData(forced: true),
-            UseDefaultPrefix = false,
-            PrefixChar = 'M',
-            PrefixColor = 526
-        });
-
-        args.AddMenuItem(new MenuItem()
-        {
-            Name = _changePermissionsSeString,
-            OnClicked = (a) => _mediator.Publish(new OpenPermissionWindow(this)),
-            UseDefaultPrefix = false,
-            PrefixChar = 'M',
-            PrefixColor = 526
-        });
-
-        args.AddMenuItem(new MenuItem()
-        {
-            Name = _cyclePauseStateSeString,
-            OnClicked = (a) => _mediator.Publish(new CyclePauseMessage(ServerIndex, UserData)),
-            UseDefaultPrefix = false,
-            PrefixChar = 'M',
-            PrefixColor = 526
-        });
-    }
+    /// <summary>
+    /// The game object entity ID of the cached player, or uint.MaxValue if not available.
+    /// </summary>
+    public uint PlayerCharacterId => CachedPlayer?.PlayerCharacterId ?? uint.MaxValue;
 
     public void ApplyData(OnlineUserCharaDataDto data)
     {

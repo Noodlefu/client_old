@@ -1,6 +1,8 @@
-﻿using Dalamud.Game.Gui.ContextMenu;
+using Dalamud.Game.Gui.ContextMenu;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using LaciSynchroni.Common.Data;
+using LaciSynchroni.Services;
 using LaciSynchroni.Common.Data.Comparer;
 using LaciSynchroni.Common.Data.Enum;
 using LaciSynchroni.Common.Data.Extensions;
@@ -9,6 +11,7 @@ using LaciSynchroni.Common.Dto.User;
 using LaciSynchroni.PlayerData.Factories;
 using LaciSynchroni.Services.Events;
 using LaciSynchroni.Services.Mediator;
+using LaciSynchroni.Services.ServerConfiguration;
 using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.SyncConfiguration.Models;
 using LaciSynchroni.Utils;
@@ -28,17 +31,22 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     private readonly SyncConfigService _configurationService;
     private readonly IContextMenu _dalamudContextMenu;
     private readonly PairFactory _pairFactory;
+    private readonly ServerConfigurationManager _serverConfigurationManager;
+    private readonly ConcurrentPairLockService _concurrentPairLockService;
     private Lazy<List<Pair>> _directPairsInternal;
     private Lazy<Dictionary<GroupFullInfoWithServer, List<Pair>>> _groupPairsInternal;
     private Lazy<Dictionary<Pair, List<GroupFullInfoDto>>> _pairsWithGroupsInternal;
 
     public PairManager(ILogger<PairManager> logger, PairFactory pairFactory,
         SyncConfigService configurationService, SyncMediator mediator,
-        IContextMenu dalamudContextMenu) : base(logger, mediator)
+        IContextMenu dalamudContextMenu, ServerConfigurationManager serverConfigurationManager,
+        ConcurrentPairLockService concurrentPairLockService) : base(logger, mediator)
     {
         _pairFactory = pairFactory;
         _configurationService = configurationService;
         _dalamudContextMenu = dalamudContextMenu;
+        _serverConfigurationManager = serverConfigurationManager;
+        _concurrentPairLockService = concurrentPairLockService;
         Mediator.Subscribe<DisconnectedMessage>(this, (msg) => ClearPairs(msg.ServerIndex));
         Mediator.Subscribe<CutsceneEndMessage>(this, (_) => ReapplyPairData());
         _directPairsInternal = DirectPairsLazy();
@@ -147,7 +155,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     public int GetVisibleUserCountAcrossAllServers() => _allClientPairs
         .Count(p => p.Value.IsVisible);
 
-    public int GetVisibleUserCount(int serverIndex) => _allClientPairs.Where(p=> p.Key.ServerIndex == serverIndex).Count(p => p.Value.IsVisible);
+    public int GetVisibleUserCount(int serverIndex) => _allClientPairs.Where(p => p.Key.ServerIndex == serverIndex).Count(p => p.Value.IsVisible);
 
     public List<ServerBasedUserKey> GetVisibleUsers(int serverIndex) =>
     [
@@ -410,11 +418,183 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     {
         if (args.MenuType == ContextMenuType.Inventory) return;
         if (!_configurationService.Current.EnableRightClickMenus) return;
+        if (args.Target is not MenuTargetDefault target) return;
 
-        foreach (var pair in _allClientPairs.Where((p => p.Value.IsVisible)))
+        // Find all visible, non-paused pairs matching this target's object ID
+        var matchingPairs = _allClientPairs
+            .Where(p => p.Value.IsVisible && p.Value.PlayerCharacterId == target.TargetObjectId && !p.Value.IsPaused)
+            .Select(p => p.Value)
+            .ToList();
+
+        if (matchingPairs.Count == 0) return;
+
+        var multipleServers = matchingPairs.Count > 1;
+
+        if (!multipleServers)
         {
-            pair.Value.AddContextMenu(args);
+            // Single server - flat menu items
+            var pair = matchingPairs[0];
+
+            args.AddMenuItem(new MenuItem()
+            {
+                Name = "Open Profile",
+                OnClicked = (a) => Mediator.Publish(new ProfileOpenStandaloneMessage(pair)),
+                UseDefaultPrefix = false,
+                PrefixChar = 'L',
+                PrefixColor = 526
+            });
+
+            args.AddMenuItem(new MenuItem()
+            {
+                Name = "Reapply Data",
+                OnClicked = (a) => pair.ApplyLastReceivedData(forced: true),
+                UseDefaultPrefix = false,
+                PrefixChar = 'L',
+                PrefixColor = 526
+            });
+
+            args.AddMenuItem(new MenuItem()
+            {
+                Name = "Change Permissions",
+                OnClicked = (a) => Mediator.Publish(new OpenPermissionWindow(pair)),
+                UseDefaultPrefix = false,
+                PrefixChar = 'L',
+                PrefixColor = 526
+            });
+
+            args.AddMenuItem(new MenuItem()
+            {
+                Name = "Cycle Pause State",
+                OnClicked = (a) => Mediator.Publish(new CyclePauseMessage(pair.ServerIndex, pair.UserData)),
+                UseDefaultPrefix = false,
+                PrefixChar = 'L',
+                PrefixColor = 526
+            });
         }
+        else
+        {
+            // Multiple servers - use submenus
+            var pairsForClosure = matchingPairs.ToList();
+
+            // Open Profile submenu
+            args.AddMenuItem(new MenuItem()
+            {
+                Name = "Open Profile",
+                IsSubmenu = true,
+                OnClicked = (a) => a.OpenSubmenu(BuildPerServerSubmenuItems(pairsForClosure,
+                    pair => Mediator.Publish(new ProfileOpenStandaloneMessage(pair)))),
+                UseDefaultPrefix = false,
+                PrefixChar = 'L',
+                PrefixColor = 526
+            });
+
+            // Reapply Data - only for the server with render lock
+            var renderLockPair = pairsForClosure.FirstOrDefault(p =>
+                _concurrentPairLockService.GetRenderLock(p.GetPlayerNameHash(), p.ServerIndex, p.PlayerName) == p.ServerIndex);
+            if (renderLockPair != null)
+            {
+                args.AddMenuItem(new MenuItem()
+                {
+                    Name = "Reapply Data",
+                    OnClicked = (a) => renderLockPair.ApplyLastReceivedData(forced: true),
+                    UseDefaultPrefix = false,
+                    PrefixChar = 'L',
+                    PrefixColor = 526
+                });
+            }
+
+            // Change Permissions submenu
+            args.AddMenuItem(new MenuItem()
+            {
+                Name = "Change Permissions",
+                IsSubmenu = true,
+                OnClicked = (a) => a.OpenSubmenu(BuildPerServerSubmenuItems(pairsForClosure,
+                    pair => Mediator.Publish(new OpenPermissionWindow(pair)))),
+                UseDefaultPrefix = false,
+                PrefixChar = 'L',
+                PrefixColor = 526
+            });
+
+            // Cycle Pause State submenu - includes "All Servers" option
+            args.AddMenuItem(new MenuItem()
+            {
+                Name = "Cycle Pause State",
+                IsSubmenu = true,
+                OnClicked = (a) => a.OpenSubmenu(BuildCyclePauseSubmenuItems(pairsForClosure)),
+                UseDefaultPrefix = false,
+                PrefixChar = 'L',
+                PrefixColor = 526
+            });
+        }
+    }
+
+    private List<MenuItem> BuildPerServerSubmenuItems(List<Pair> pairs, Action<Pair> action)
+    {
+        var items = pairs.Select(pair => new MenuItem()
+        {
+            Name = _serverConfigurationManager.GetServerNameByIndex(pair.ServerIndex),
+            OnClicked = (a) => action(pair),
+            UseDefaultPrefix = false,
+            PrefixChar = 'L',
+            PrefixColor = 526
+        }).ToList();
+
+        items.Add(new MenuItem()
+        {
+            Name = "Return",
+            IsReturn = true,
+            OnClicked = (a) => ReopenContextMenu()
+        });
+
+        return items;
+    }
+
+    private unsafe void ReopenContextMenu()
+    {
+        var agentContext = AgentContext.Instance();
+        if (agentContext != null)
+        {
+            agentContext->OpenContextMenu();
+        }
+    }
+
+    private List<MenuItem> BuildCyclePauseSubmenuItems(List<Pair> pairs)
+    {
+        var items = new List<MenuItem>
+        {
+            // "All Servers" option first
+            new MenuItem()
+            {
+                Name = "All Servers",
+                OnClicked = (a) =>
+                {
+                    foreach (var p in pairs)
+                        Mediator.Publish(new CyclePauseMessage(p.ServerIndex, p.UserData));
+                },
+                UseDefaultPrefix = false,
+                PrefixChar = 'L',
+                PrefixColor = 526
+            }
+        };
+
+        // Per-server options
+        items.AddRange(pairs.Select(pair => new MenuItem()
+        {
+            Name = _serverConfigurationManager.GetServerNameByIndex(pair.ServerIndex),
+            OnClicked = (a) => Mediator.Publish(new CyclePauseMessage(pair.ServerIndex, pair.UserData)),
+            UseDefaultPrefix = false,
+            PrefixChar = 'L',
+            PrefixColor = 526
+        }));
+
+        items.Add(new MenuItem()
+        {
+            Name = "Return",
+            IsReturn = true,
+            OnClicked = (a) => ReopenContextMenu()
+        });
+
+        return items;
     }
 
     private Lazy<List<Pair>> DirectPairsLazy() => new(() => _allClientPairs.Select(k => k.Value)
@@ -501,7 +681,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     /// In cases like this, more than one pair exists for the same player, because one pair exists per server.
     ///
     /// The PairManager will dispose the pair that just went offline. The other pair, however, is not aware of it. So we
-    /// need to figure out if any of these pairs are left, and then redraw them by reapplying last data. 
+    /// need to figure out if any of these pairs are left, and then redraw them by reapplying last data.
     /// </summary>
     /// <param name="removedPair">The instance of the pair that got removed</param>
     /// <param name="removedPlayerName">The name of the remvoed pair. Don't remove this, the pair has to be disposed
