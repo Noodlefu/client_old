@@ -1,4 +1,4 @@
-﻿using Dalamud.Game.Gui.Dtr;
+using Dalamud.Game.Gui.Dtr;
 using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
@@ -135,25 +135,38 @@ public sealed class DtrEntry : IDisposable, IHostedService
         Colors colors;
         if (_apiController.AnyServerConnected)
         {
-            var pairCount = _pairManager.GetVisibleUserCountAcrossAllServers();
+            // Group visible pairs by player identity to avoid counting duplicates across servers
+            var visiblePairsByPlayer = _pairManager.GetOnlineUserPairsAcrossAllServers()
+                .Where(x => x.IsVisible)
+                .GroupBy(x => x.GetPlayerNameHash())
+                .ToList();
+
+            var pairCount = visiblePairsByPlayer.Count;
             text = $"\uE044 {pairCount}";
             if (pairCount > 0)
             {
-                IEnumerable<string> visiblePairs;
-                if (_configService.Current.ShowUidInDtrTooltip)
+                IEnumerable<string> visiblePairs = visiblePairsByPlayer.Select(group =>
                 {
-                    visiblePairs = _pairManager.GetOnlineUserPairsAcrossAllServers()
-                        .Where(x => x.IsVisible)
-                        .Select(x => string.Format("{0} ({1}{2})", _configService.Current.PreferNoteInDtrTooltip ? x.GetNote() ?? x.PlayerName : x.PlayerName, x.UserData.AliasOrUID,
-                                _serverConfigurationManager.GetServerByIndex(x.ServerIndex).ServerIcon == null ? "" : $" - {_serverConfigurationManager.GetServerByIndex(x.ServerIndex).ServerIcon}"));
-                }
-                else
-                {
-                    visiblePairs = _pairManager.GetOnlineUserPairsAcrossAllServers()
-                        .Where(x => x.IsVisible)
-                        .Select(x => string.Format("{0} {1}", _configService.Current.PreferNoteInDtrTooltip ? x.GetNote() ?? x.PlayerName : x.PlayerName,
-                                _serverConfigurationManager.GetServerByIndex(x.ServerIndex).ServerIcon == null ? "" : $"({_serverConfigurationManager.GetServerByIndex(x.ServerIndex).ServerIcon})"));
-                }
+                    var firstPair = group.First();
+                    var displayName = _configService.Current.PreferNoteInDtrTooltip ? firstPair.GetNote() ?? firstPair.PlayerName : firstPair.PlayerName;
+
+                    // Get server display names - use icon if set, otherwise use server name
+                    var serverDisplayNames = group
+                        .Select(p => _serverConfigurationManager.GetServerByIndex(p.ServerIndex))
+                        .Select(server => server.ServerIcon?.ToString() ?? server.ServerName);
+                    var serverPart = string.Join(", ", serverDisplayNames);
+
+                    if (_configService.Current.ShowUidInDtrTooltip)
+                    {
+                        return string.Format("{0} ({1}{2})", displayName, firstPair.UserData.AliasOrUID,
+                            string.IsNullOrEmpty(serverPart) ? "" : $" - {serverPart}");
+                    }
+                    else
+                    {
+                        return string.Format("{0} {1}", displayName,
+                            string.IsNullOrEmpty(serverPart) ? "" : $"({serverPart})");
+                    }
+                });
 
                 tooltip = $"Laci Synchroni: Connected{Environment.NewLine}----------{Environment.NewLine}{string.Join(Environment.NewLine, visiblePairs)}";
                 colors = _configService.Current.DtrColorsPairsInRange;
