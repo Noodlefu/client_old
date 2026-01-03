@@ -1,4 +1,4 @@
-﻿using Dalamud.Game.ClientState.Objects.Types;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin;
 using Glamourer.Api.Helpers;
 using Glamourer.Api.IpcSubscribers;
@@ -10,11 +10,8 @@ using Microsoft.Extensions.Logging;
 
 namespace LaciSynchroni.Interop.Ipc;
 
-public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcCaller
+public sealed class IpcCallerGlamourer : IpcCallerBase
 {
-    private readonly ILogger<IpcCallerGlamourer> _logger;
-    private readonly IDalamudPluginInterface _pi;
-    private readonly DalamudUtilService _dalamudUtil;
     private readonly SyncMediator _syncMediator;
     private readonly RedrawManager _redrawManager;
 
@@ -27,11 +24,15 @@ public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcC
     private readonly UnlockStateName _glamourerUnlockByName;
     private readonly EventSubscriber<nint>? _glamourerStateChanged;
 
-    private bool _shownGlamourerUnavailable = false;
     private readonly uint LockCode = 0x6D617265;
 
+    // IpcCallerBase overrides
+    protected override string TargetPluginName => "Glamourer";
+    protected override Version? MinimumVersion => new(1, 3, 0, 10);
+    protected override bool ShowUnavailableNotification => true;
+
     public IpcCallerGlamourer(ILogger<IpcCallerGlamourer> logger, IDalamudPluginInterface pi, DalamudUtilService dalamudUtil, SyncMediator syncMediator,
-        RedrawManager redrawManager) : base(logger, syncMediator)
+        RedrawManager redrawManager) : base(logger, pi, dalamudUtil, syncMediator)
     {
         _glamourerApiVersions = new ApiVersion(pi);
         _glamourerGetAllCustomization = new GetStateBase64(pi);
@@ -41,17 +42,12 @@ public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcC
         _glamourerUnlock = new UnlockState(pi);
         _glamourerUnlockByName = new UnlockStateName(pi);
 
-        _logger = logger;
-        _pi = pi;
-        _dalamudUtil = dalamudUtil;
         _syncMediator = syncMediator;
         _redrawManager = redrawManager;
         CheckAPI();
 
         _glamourerStateChanged = StateChanged.Subscriber(pi, GlamourerChanged);
         _glamourerStateChanged.Enable();
-
-        Mediator.Subscribe<DalamudLoginMessage>(this, s => _shownGlamourerUnavailable = false);
     }
 
     protected override void Dispose(bool disposing)
@@ -62,53 +58,31 @@ public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcC
         _glamourerStateChanged?.Dispose();
     }
 
-    public bool APIAvailable { get; private set; }
-
-    public void CheckAPI()
+    protected override bool CheckApiViaIpc()
     {
-        bool apiAvailable = false;
         try
         {
-            bool versionValid = (_pi.InstalledPlugins
-                .FirstOrDefault(p => string.Equals(p.InternalName, "Glamourer", StringComparison.OrdinalIgnoreCase))
-                ?.Version ?? new Version(0, 0, 0, 0)) >= new Version(1, 3, 0, 10);
-            try
-            {
-                var version = _glamourerApiVersions.Invoke();
-                if (version is { Major: 1, Minor: >= 1 } && versionValid)
-                {
-                    apiAvailable = true;
-                }
-            }
-            catch
-            {
-                // ignore
-            }
-            _shownGlamourerUnavailable = _shownGlamourerUnavailable && !apiAvailable;
-
-            APIAvailable = apiAvailable;
+            var version = _glamourerApiVersions.Invoke();
+            return version is { Major: 1, Minor: >= 1 };
         }
         catch
         {
-            APIAvailable = apiAvailable;
+            return false;
         }
-        finally
-        {
-            if (!apiAvailable && !_shownGlamourerUnavailable)
-            {
-                _shownGlamourerUnavailable = true;
-                _syncMediator.Publish(new NotificationMessage(
-                    "Glamourer inactive",
-                    $"Your Glamourer installation is not active or out of date. Update Glamourer to continue to use {_dalamudUtil.GetPluginName()}." +
-                    " If you just updated Glamourer, ignore this message.",
-                    NotificationType.Error));
-            }
-        }
+    }
+
+    protected override void PublishUnavailableNotification()
+    {
+        Mediator.Publish(new NotificationMessage(
+            "Glamourer inactive",
+            $"Your Glamourer installation is not active or out of date. Update Glamourer to continue to use {DalamudUtil.GetPluginName()}." +
+            " If you just updated Glamourer, ignore this message.",
+            NotificationType.Error));
     }
 
     public async Task ApplyAllAsync(ILogger logger, GameObjectHandler handler, string? customization, Guid applicationId, CancellationToken token, bool fireAndForget = false)
     {
-        if (!APIAvailable || string.IsNullOrEmpty(customization) || _dalamudUtil.IsZoning) return;
+        if (!APIAvailable || string.IsNullOrEmpty(customization) || DalamudUtil.IsZoning) return;
 
         await _redrawManager.RedrawSemaphore.WaitAsync(token).ConfigureAwait(false);
 
@@ -139,9 +113,9 @@ public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcC
         if (!APIAvailable) return string.Empty;
         try
         {
-            return await _dalamudUtil.RunOnFrameworkThread(() =>
+            return await DalamudUtil.RunOnFrameworkThread(() =>
             {
-                var gameObj = _dalamudUtil.CreateGameObject(character);
+                var gameObj = DalamudUtil.CreateGameObject(character);
                 if (gameObj is ICharacter c)
                 {
                     return _glamourerGetAllCustomization!.Invoke(c.ObjectIndex).Item2 ?? string.Empty;
@@ -157,7 +131,7 @@ public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcC
 
     public async Task RevertAsync(ILogger logger, GameObjectHandler handler, Guid applicationId, CancellationToken token)
     {
-        if ((!APIAvailable) || _dalamudUtil.IsZoning) return;
+        if ((!APIAvailable) || DalamudUtil.IsZoning) return;
         try
         {
             await _redrawManager.RedrawSemaphore.WaitAsync(token).ConfigureAwait(false);
@@ -187,9 +161,9 @@ public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcC
 
     public async Task RevertByNameAsync(ILogger logger, string name, Guid applicationId)
     {
-        if ((!APIAvailable) || _dalamudUtil.IsZoning) return;
+        if ((!APIAvailable) || DalamudUtil.IsZoning) return;
 
-        await _dalamudUtil.RunOnFrameworkThread(() =>
+        await DalamudUtil.RunOnFrameworkThread(() =>
         {
             RevertByName(logger, name, applicationId);
 
@@ -198,7 +172,7 @@ public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcC
 
     public void RevertByName(ILogger logger, string name, Guid applicationId)
     {
-        if ((!APIAvailable) || _dalamudUtil.IsZoning) return;
+        if ((!APIAvailable) || DalamudUtil.IsZoning) return;
 
         try
         {
@@ -209,7 +183,7 @@ public sealed class IpcCallerGlamourer : DisposableMediatorSubscriberBase, IIpcC
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error during Glamourer RevertByName");
+            Logger.LogWarning(ex, "Error during Glamourer RevertByName");
         }
     }
 

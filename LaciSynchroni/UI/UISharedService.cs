@@ -1,4 +1,4 @@
-﻿using Dalamud;
+using Dalamud;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
@@ -58,10 +58,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
     private bool _cacheDirectoryHasOtherFilesThanCache = false;
     private bool _cacheDirectoryIsValidPath = true;
     private bool _customizePlusExists = false;
-    private string _customServerName = "";
     private string _customServerUri = "";
-    private bool _useAdvancedUris = false;
-    private string _serverHubUri = "";
     private Task<Uri?>? _discordOAuthCheck;
     private Task<string?>? _discordOAuthGetCode;
     private CancellationTokenSource _discordOAuthGetCts = new();
@@ -76,7 +73,6 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
     private Dictionary<string, DateTime> _oauthTokenExpiry = new();
     private bool _penumbraExists = false;
     private bool _petNamesExists = false;
-    private int _serverSelectionIndex = -1;
     public UiSharedService(ILogger<UiSharedService> logger, IpcManager ipcManager, ApiController apiController,
         CacheMonitor cacheMonitor, FileDialogManager fileDialogManager,
         SyncConfigService configService, DalamudUtilService dalamudUtil, IDalamudPluginInterface pluginInterface,

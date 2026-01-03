@@ -1,4 +1,5 @@
-﻿using LaciSynchroni.SyncConfiguration;
+using LaciSynchroni.Services.Infrastructure;
+using LaciSynchroni.SyncConfiguration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
@@ -11,6 +12,7 @@ namespace LaciSynchroni.Services.Mediator;
 public sealed class SyncMediator : IHostedService
 {
     private readonly Lock _addRemoveLock = new();
+    private readonly BackgroundTaskTracker _taskTracker;
     private readonly ConcurrentDictionary<object, DateTime> _lastErrorTime = [];
     private readonly ILogger<SyncMediator> _logger;
     private readonly CancellationTokenSource _loopCts = new();
@@ -20,11 +22,13 @@ public sealed class SyncMediator : IHostedService
     private readonly ConcurrentDictionary<Type, HashSet<SubscriberAction>> _subscriberDict = [];
     private bool _processQueue = false;
     private readonly ConcurrentDictionary<Type, MethodInfo?> _genericExecuteMethods = new();
-    public SyncMediator(ILogger<SyncMediator> logger, PerformanceCollectorService performanceCollector, SyncConfigService syncConfigService)
+    public SyncMediator(ILogger<SyncMediator> logger, PerformanceCollectorService performanceCollector, SyncConfigService syncConfigService,
+        BackgroundTaskTracker taskTracker)
     {
         _logger = logger;
         _performanceCollector = performanceCollector;
         _syncConfigService = syncConfigService;
+        _taskTracker = taskTracker;
     }
 
     public void PrintSubscriberInfo()
@@ -62,7 +66,7 @@ public sealed class SyncMediator : IHostedService
     {
         _logger.LogInformation("Starting {ClassName}", GetType().Name);
 
-        _ = Task.Run(async () =>
+        _taskTracker.Run(async () =>
         {
             while (!_loopCts.Token.IsCancellationRequested)
             {
@@ -82,7 +86,7 @@ public sealed class SyncMediator : IHostedService
                     ExecuteMessage(message);
                 }
             }
-        });
+        }, "SyncMediator.MessageLoop", _loopCts.Token);
 
         _logger.LogInformation("Started {ClassName}", GetType().Name);
 

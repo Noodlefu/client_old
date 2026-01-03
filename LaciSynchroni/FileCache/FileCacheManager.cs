@@ -1,4 +1,4 @@
-﻿using K4os.Compression.LZ4.Legacy;
+using K4os.Compression.LZ4.Legacy;
 using LaciSynchroni.Interop.Ipc;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.SyncConfiguration;
@@ -22,6 +22,7 @@ public sealed class FileCacheManager : IHostedService
     private readonly SyncMediator _syncMediator;
     private readonly string _csvPath;
     private readonly ConcurrentDictionary<string, List<FileCacheEntity>> _fileCaches = new(StringComparer.Ordinal);
+    private readonly Lock _fileCachesLock = new();
     private readonly SemaphoreSlim _getCachesByPathsSemaphore = new(1, 1);
     private readonly Lock _fileWriteLock = new();
     private readonly IpcManager _ipcManager;
@@ -61,21 +62,34 @@ public sealed class FileCacheManager : IHostedService
         return CreateFileCacheEntity(fi, prefixedPath);
     }
 
-    public List<FileCacheEntity> GetAllFileCaches() => _fileCaches.Values.SelectMany(v => v).ToList();
+    public List<FileCacheEntity> GetAllFileCaches()
+    {
+        lock (_fileCachesLock)
+        {
+            return _fileCaches.Values.SelectMany(v => v).ToList();
+        }
+    }
 
     public List<FileCacheEntity> GetAllFileCachesByHash(string hash, bool ignoreCacheEntries = false, bool validate = true)
     {
         List<FileCacheEntity> output = [];
-        if (_fileCaches.TryGetValue(hash, out var fileCacheEntities))
+        List<FileCacheEntity> entitiesToProcess;
+        lock (_fileCachesLock)
         {
-            foreach (var fileCache in fileCacheEntities.Where(c => !ignoreCacheEntries || !c.IsCacheEntry).ToList())
+            if (!_fileCaches.TryGetValue(hash, out var fileCacheEntities))
             {
-                if (!validate) output.Add(fileCache);
-                else
-                {
-                    var validated = GetValidatedFileCache(fileCache);
-                    if (validated != null) output.Add(validated);
-                }
+                return output;
+            }
+            entitiesToProcess = fileCacheEntities.Where(c => !ignoreCacheEntries || !c.IsCacheEntry).ToList();
+        }
+
+        foreach (var fileCache in entitiesToProcess)
+        {
+            if (!validate) output.Add(fileCache);
+            else
+            {
+                var validated = GetValidatedFileCache(fileCache);
+                if (validated != null) output.Add(validated);
             }
         }
 
@@ -86,7 +100,11 @@ public sealed class FileCacheManager : IHostedService
     {
         _syncMediator.Publish(new HaltScanMessage(nameof(ValidateLocalIntegrity)));
         _logger.LogInformation("Validating local storage");
-        var cacheEntries = _fileCaches.SelectMany(v => v.Value).Where(v => v.IsCacheEntry).ToList();
+        List<FileCacheEntity> cacheEntries;
+        lock (_fileCachesLock)
+        {
+            cacheEntries = _fileCaches.SelectMany(v => v.Value).Where(v => v.IsCacheEntry).ToList();
+        }
         List<FileCacheEntity> brokenEntities = [];
         int i = 0;
         foreach (var fileCache in cacheEntries)
@@ -151,11 +169,16 @@ public sealed class FileCacheManager : IHostedService
 
     public FileCacheEntity? GetFileCacheByHash(string hash)
     {
-        if (_fileCaches.TryGetValue(hash, out var hashes))
+        FileCacheEntity? item;
+        lock (_fileCachesLock)
         {
-            var item = hashes.OrderBy(p => p.PrefixedFilePath.Contains(PenumbraPrefix) ? 0 : 1).FirstOrDefault();
-            if (item != null) return GetValidatedFileCache(item);
+            if (!_fileCaches.TryGetValue(hash, out var hashes))
+            {
+                return null;
+            }
+            item = hashes.OrderBy(p => p.PrefixedFilePath.Contains(PenumbraPrefix) ? 0 : 1).FirstOrDefault();
         }
+        if (item != null) return GetValidatedFileCache(item);
         return null;
     }
 
@@ -163,7 +186,11 @@ public sealed class FileCacheManager : IHostedService
     {
         var cleanedPath = path.Replace("/", "\\", StringComparison.OrdinalIgnoreCase).ToLowerInvariant()
             .Replace(_ipcManager.Penumbra.ModDirectory!.ToLowerInvariant(), "", StringComparison.OrdinalIgnoreCase);
-        var entry = _fileCaches.SelectMany(v => v.Value).FirstOrDefault(f => f.ResolvedFilepath.EndsWith(cleanedPath, StringComparison.OrdinalIgnoreCase));
+        FileCacheEntity? entry;
+        lock (_fileCachesLock)
+        {
+            entry = _fileCaches.SelectMany(v => v.Value).FirstOrDefault(f => f.ResolvedFilepath.EndsWith(cleanedPath, StringComparison.OrdinalIgnoreCase));
+        }
 
         if (entry == null)
         {
@@ -191,8 +218,12 @@ public sealed class FileCacheManager : IHostedService
 
             Dictionary<string, FileCacheEntity?> result = new(StringComparer.OrdinalIgnoreCase);
 
-            var dict = _fileCaches.SelectMany(f => f.Value)
-                .ToDictionary(d => d.PrefixedFilePath, d => d, StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, FileCacheEntity> dict;
+            lock (_fileCachesLock)
+            {
+                dict = _fileCaches.SelectMany(f => f.Value)
+                    .ToDictionary(d => d.PrefixedFilePath, d => d, StringComparer.OrdinalIgnoreCase);
+            }
 
             foreach (var entry in cleanedPaths)
             {
@@ -222,14 +253,17 @@ public sealed class FileCacheManager : IHostedService
 
     public void RemoveHashedFile(string hash, string prefixedFilePath)
     {
-        if (_fileCaches.TryGetValue(hash, out var caches))
+        lock (_fileCachesLock)
         {
-            var removedCount = caches?.RemoveAll(c => string.Equals(c.PrefixedFilePath, prefixedFilePath, StringComparison.Ordinal));
-            _logger.LogTrace("Removed from DB: {count} file(s) with hash {hash} and file cache {path}", removedCount, hash, prefixedFilePath);
-
-            if (caches?.Count == 0)
+            if (_fileCaches.TryGetValue(hash, out var caches))
             {
-                _fileCaches.Remove(hash, out var entity);
+                var removedCount = caches?.RemoveAll(c => string.Equals(c.PrefixedFilePath, prefixedFilePath, StringComparison.Ordinal));
+                _logger.LogTrace("Removed from DB: {count} file(s) with hash {hash} and file cache {path}", removedCount, hash, prefixedFilePath);
+
+                if (caches?.Count == 0)
+                {
+                    _fileCaches.Remove(hash, out var entity);
+                }
             }
         }
     }
@@ -272,7 +306,12 @@ public sealed class FileCacheManager : IHostedService
         lock (_fileWriteLock)
         {
             StringBuilder sb = new();
-            foreach (var entry in _fileCaches.SelectMany(k => k.Value).OrderBy(f => f.PrefixedFilePath, StringComparer.OrdinalIgnoreCase))
+            List<FileCacheEntity> entries;
+            lock (_fileCachesLock)
+            {
+                entries = _fileCaches.SelectMany(k => k.Value).OrderBy(f => f.PrefixedFilePath, StringComparer.OrdinalIgnoreCase).ToList();
+            }
+            foreach (var entry in entries)
             {
                 sb.AppendLine(entry.CsvEntry);
             }
@@ -317,15 +356,18 @@ public sealed class FileCacheManager : IHostedService
 
     private void AddHashedFile(FileCacheEntity fileCache)
     {
-        if (!_fileCaches.TryGetValue(fileCache.Hash, out var entries) || entries is null)
+        lock (_fileCachesLock)
         {
-            _fileCaches[fileCache.Hash] = entries = [];
-        }
+            if (!_fileCaches.TryGetValue(fileCache.Hash, out var entries) || entries is null)
+            {
+                _fileCaches[fileCache.Hash] = entries = [];
+            }
 
-        if (!entries.Exists(u => string.Equals(u.PrefixedFilePath, fileCache.PrefixedFilePath, StringComparison.OrdinalIgnoreCase)))
-        {
-            //_logger.LogTrace("Adding to DB: {hash} => {path}", fileCache.Hash, fileCache.PrefixedFilePath);
-            entries.Add(fileCache);
+            if (!entries.Exists(u => string.Equals(u.PrefixedFilePath, fileCache.PrefixedFilePath, StringComparison.OrdinalIgnoreCase)))
+            {
+                //_logger.LogTrace("Adding to DB: {hash} => {path}", fileCache.Hash, fileCache.PrefixedFilePath);
+                entries.Add(fileCache);
+            }
         }
     }
 

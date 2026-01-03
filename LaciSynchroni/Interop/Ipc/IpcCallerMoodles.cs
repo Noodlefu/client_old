@@ -1,4 +1,3 @@
-﻿using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using LaciSynchroni.Services;
@@ -7,24 +6,20 @@ using Microsoft.Extensions.Logging;
 
 namespace LaciSynchroni.Interop.Ipc;
 
-public sealed class IpcCallerMoodles : IIpcCaller
+public sealed class IpcCallerMoodles : IpcCallerBase
 {
     private readonly ICallGateSubscriber<int> _moodlesApiVersion;
     private readonly ICallGateSubscriber<nint, object> _moodlesOnChange;
     private readonly ICallGateSubscriber<nint, string> _moodlesGetStatus;
     private readonly ICallGateSubscriber<nint, string, object> _moodlesSetStatus;
     private readonly ICallGateSubscriber<nint, object> _moodlesRevertStatus;
-    private readonly ILogger<IpcCallerMoodles> _logger;
-    private readonly DalamudUtilService _dalamudUtil;
-    private readonly SyncMediator _syncMediator;
+
+    protected override string TargetPluginName => "Moodles";
 
     public IpcCallerMoodles(ILogger<IpcCallerMoodles> logger, IDalamudPluginInterface pi, DalamudUtilService dalamudUtil,
         SyncMediator syncMediator)
+        : base(logger, pi, dalamudUtil, syncMediator)
     {
-        _logger = logger;
-        _dalamudUtil = dalamudUtil;
-        _syncMediator = syncMediator;
-
         _moodlesApiVersion = pi.GetIpcSubscriber<int>("Moodles.Version");
         _moodlesOnChange = pi.GetIpcSubscriber<nint, object>("Moodles.StatusManagerModified");
         _moodlesGetStatus = pi.GetIpcSubscriber<nint, string>("Moodles.GetStatusManagerByPtrV2");
@@ -36,69 +31,52 @@ public sealed class IpcCallerMoodles : IIpcCaller
         CheckAPI();
     }
 
-    private void OnMoodlesChange(nint characterAddress)
-    {
-        _syncMediator.Publish(new MoodlesMessage(characterAddress));
-    }
-
-    public bool APIAvailable { get; private set; } = false;
-
-    public void CheckAPI()
+    protected override bool CheckApiViaIpc()
     {
         try
         {
-            APIAvailable = _moodlesApiVersion.InvokeFunc() == 4;
+            return _moodlesApiVersion.InvokeFunc() == 4;
         }
         catch
         {
-            APIAvailable = false;
+            return false;
         }
     }
 
-    public void Dispose()
+    private void OnMoodlesChange(nint characterAddress)
     {
-        _moodlesOnChange.Unsubscribe(OnMoodlesChange);
+        Mediator.Publish(new MoodlesMessage(characterAddress));
     }
 
     public async Task<string?> GetStatusAsync(nint address)
     {
-        if (!APIAvailable) return null;
-
-        try
-        {
-            return await _dalamudUtil.RunOnFrameworkThread(() => _moodlesGetStatus.InvokeFunc(address)).ConfigureAwait(false);
-
-        }
-        catch (Exception e)
-        {
-            _logger.LogWarning(e, "Could not Get Moodles Status");
-            return null;
-        }
+        return await SafeInvokeAsync(
+            async () => await DalamudUtil.RunOnFrameworkThread(() => _moodlesGetStatus.InvokeFunc(address)).ConfigureAwait(false),
+            defaultValue: null).ConfigureAwait(false);
     }
 
     public async Task SetStatusAsync(nint pointer, string status)
     {
-        if (!APIAvailable) return;
-        try
+        await SafeInvokeAsync(async () =>
         {
-            await _dalamudUtil.RunOnFrameworkThread(() => _moodlesSetStatus.InvokeAction(pointer, status)).ConfigureAwait(false);
-        }
-        catch (Exception e)
-        {
-            _logger.LogWarning(e, "Could not Set Moodles Status");
-        }
+            await DalamudUtil.RunOnFrameworkThread(() => _moodlesSetStatus.InvokeAction(pointer, status)).ConfigureAwait(false);
+        }).ConfigureAwait(false);
     }
 
     public async Task RevertStatusAsync(nint pointer)
     {
-        if (!APIAvailable) return;
-        try
+        await SafeInvokeAsync(async () =>
         {
-            await _dalamudUtil.RunOnFrameworkThread(() => _moodlesRevertStatus.InvokeAction(pointer)).ConfigureAwait(false);
-        }
-        catch (Exception e)
+            await DalamudUtil.RunOnFrameworkThread(() => _moodlesRevertStatus.InvokeAction(pointer)).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (disposing)
         {
-            _logger.LogWarning(e, "Could not Set Moodles Status");
+            _moodlesOnChange.Unsubscribe(OnMoodlesChange);
         }
     }
 }

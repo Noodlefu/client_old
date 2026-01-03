@@ -1,4 +1,4 @@
-﻿using Dalamud.Game;
+using Dalamud.Game;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
@@ -12,6 +12,7 @@ using LaciSynchroni.PlayerData.Services;
 using LaciSynchroni.Services;
 using LaciSynchroni.Services.CharaData;
 using LaciSynchroni.Services.Events;
+using LaciSynchroni.Services.Infrastructure;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.Services.ServerConfiguration;
 using LaciSynchroni.SyncConfiguration;
@@ -43,7 +44,7 @@ public sealed class Plugin : IDalamudPlugin
         IGameGui gameGui, IDtrBar dtrBar, IPluginLog pluginLog, ITargetManager targetManager, INotificationManager notificationManager,
         ITextureProvider textureProvider, IContextMenu contextMenu, IGameInteropProvider gameInteropProvider, IGameConfig gameConfig)
     {
-        // TODO: remove this temporary config migration stuff
+        // Legacy config migration: copy from old "SinusSynchronous" directory if it exists
         {
             var configDir = Path.GetFullPath(Path.Combine(pluginInterface.ConfigFile.FullName, "..", pluginInterface.InternalName));
             var legacyConfigDir = Path.GetFullPath(Path.Combine(configDir, "..", "SinusSynchronous"));
@@ -53,7 +54,8 @@ public sealed class Plugin : IDalamudPlugin
                 CopyFilesRecursively(new DirectoryInfo(legacyConfigDir), new DirectoryInfo(configDir));
             }
 
-            static void CopyFilesRecursively(DirectoryInfo source, DirectoryInfo target) {
+            static void CopyFilesRecursively(DirectoryInfo source, DirectoryInfo target)
+            {
                 foreach (var dir in source.GetDirectories())
                     CopyFilesRecursively(dir, target.CreateSubdirectory(dir.Name));
                 foreach (var file in source.GetFiles())
@@ -108,6 +110,7 @@ public sealed class Plugin : IDalamudPlugin
             collection.AddSingleton(new Dalamud.Localization(pluginInterface.InternalName + ".Localization.", "", useEmbedded: true));
 
             // add Laci-related singletons
+            collection.AddSingleton<BackgroundTaskTracker>();
             collection.AddSingleton<SyncMediator>();
             collection.AddSingleton<FileCacheManager>();
             collection.AddSingleton<ServerConfigurationManager>();
@@ -249,7 +252,7 @@ public sealed class Plugin : IDalamudPlugin
                 s.GetRequiredService<PerformanceCollectorService>(),
                 s.GetRequiredService<HttpClient>()));
             collection.AddScoped<WindowMediatorSubscriberBase, RulesUI>((s) => new RulesUI(
-                s.GetRequiredService<ILogger<ServerJoinConfirmationUI>>(),
+                s.GetRequiredService<ILogger<RulesUI>>(),
                 s.GetRequiredService<SyncMediator>(),
                 s.GetRequiredService<UiSharedService>(),
                 s.GetRequiredService<PerformanceCollectorService>()));

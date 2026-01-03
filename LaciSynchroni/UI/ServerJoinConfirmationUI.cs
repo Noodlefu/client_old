@@ -25,7 +25,6 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
 {
     private readonly ServerConfigurationManager _serverConfigurationManager;
     private readonly UiSharedService _uiSharedService;
-    private readonly ILogger<ServerJoinConfirmationUI> _logger;
     private readonly DalamudUtilService _dalamudUtil;
     private readonly HttpClient _httpClient;
 
@@ -34,9 +33,10 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
     private bool _isAuthenticating = false;
     private CancellationTokenSource _authCts = new();
 
-    private Task<HttpResponseMessage> _serverInfoTask;
+    private Task<HttpResponseMessage>? _serverInfoTask;
+    private HttpResponseMessage? _serverInfoResponse;
     private bool _hasReceivedServerInfo = false;
-    private string _serverRules;
+    private string _serverRules = string.Empty;
     private bool _hasAcceptedRules;
     private bool _isSecretKeyValid = true;
 
@@ -55,7 +55,6 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
         HttpClient httpClient)
         : base(logger, mediator, "Add Laci Synchroni Server###LaciSynchroniServerJoinConfirmation", performanceCollectorService)
     {
-        _logger = logger;
         _serverConfigurationManager = serverConfigurationManager;
         _uiSharedService = uiSharedService;
         _dalamudUtil = dalamudUtil;
@@ -81,6 +80,10 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
 
     private void HandleServerJoinRequest(ServerJoinRequestMessage message)
     {
+        // Dispose previous response if any
+        _serverInfoResponse?.Dispose();
+        _serverInfoResponse = null;
+
         _pendingServer = message.ServerStorage;
         _isAuthenticating = false;
         _addedServerIndex = -1;
@@ -111,6 +114,8 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
         _authCts = new CancellationTokenSource();
         _isAuthenticating = false;
         _addedServerIndex = -1;
+        _serverInfoResponse?.Dispose();
+        _serverInfoResponse = null;
         base.OnClose();
     }
 
@@ -133,13 +138,19 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
         ImGui.Separator();
         ImGuiHelpers.ScaledDummy(2f);
 
-        if (!_serverInfoTask.IsCompleted)
+        if (_serverInfoTask == null || !_serverInfoTask.IsCompleted)
         {
             DrawServerLabel("Fetching server info...", "");
             return;
         }
 
-        if (_serverInfoTask.IsFaulted || !_serverInfoTask.Result.IsSuccessStatusCode)
+        // Store the response for later disposal
+        if (_serverInfoResponse == null && !_serverInfoTask.IsFaulted)
+        {
+            _serverInfoResponse = _serverInfoTask.Result;
+        }
+
+        if (_serverInfoTask.IsFaulted || _serverInfoResponse == null || !_serverInfoResponse.IsSuccessStatusCode)
         {
             UiSharedService.ColorTextWrapped(
                 "Failed to connect and fetch server info. You will have to configure the necessary settings manually.",
@@ -153,13 +164,13 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
                 ImGuiColors.HealerGreen);
             if (!_hasReceivedServerInfo)
             {
-                var config = JsonSerializer.Deserialize<ConfigurationDto>(_serverInfoTask.Result.Content.ReadAsStream());
-                _pendingServer.ServerName = config.ServerName;
-                _pendingServer.UseOAuth2 = config.IsOAuthEnabled ?? true;
-                _pendingServer.ServerHubUri = config.HubUri?.ToString() ?? "";
+                var config = JsonSerializer.Deserialize<ConfigurationDto>(_serverInfoResponse.Content.ReadAsStream());
+                _pendingServer.ServerName = config?.ServerName ?? string.Empty;
+                _pendingServer.UseOAuth2 = config?.IsOAuthEnabled ?? true;
+                _pendingServer.ServerHubUri = config?.HubUri?.ToString() ?? "";
                 _pendingServer.UseAdvancedUris = !_pendingServer.ServerHubUri.IsNullOrEmpty() || !_pendingServer.AuthUri.IsNullOrEmpty();
-                _pendingServer.DiscordInvite = config.DiscordInvite ?? "";
-                _serverRules = config.ServerRules ?? "";
+                _pendingServer.DiscordInvite = config?.DiscordInvite ?? "";
+                _serverRules = config?.ServerRules ?? "";
                 _hasReceivedServerInfo = true;
             }
         }
@@ -252,7 +263,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Failed to add server: {ServerName}", _pendingServer.ServerName);
+                        _logger.LogError(ex, "Failed to add server: {ServerName}", _pendingServer?.ServerName);
                         Mediator.Publish(new NotificationMessage(
                             "Error",
                             "Failed to add server. Please try again or add it manually in Settings.",
@@ -510,4 +521,3 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
         }
     }
 }
-

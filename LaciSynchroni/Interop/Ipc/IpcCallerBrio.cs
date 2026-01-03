@@ -1,4 +1,4 @@
-﻿using Brio.API;
+using Brio.API;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
@@ -39,13 +39,13 @@ public sealed class IpcCallerBrio : IIpcCaller
         _apiVersion = new ApiVersion(dalamudPluginInterface);
         _spawnActor = new SpawnActor(dalamudPluginInterface);
         _despawnActor = new DespawnActor(dalamudPluginInterface);
-       
+
         _setModelTransform = new SetModelTransform(dalamudPluginInterface);
         _getModelTransform = new GetModelTransform(dalamudPluginInterface);
-        
+
         _getPoseAsJson = new GetPoseAsJson(dalamudPluginInterface);
         _setPoseFromJson = new LoadPoseFromJson(dalamudPluginInterface);
-        
+
         _freezeActor = new FreezeActor(dalamudPluginInterface);
         _freezePhysics = new FreezePhysics(dalamudPluginInterface);
 
@@ -102,6 +102,8 @@ public sealed class IpcCallerBrio : IIpcCaller
         var data = await _dalamudUtilService.RunOnFrameworkThread(() => _getModelTransform.Invoke(gameObject)).ConfigureAwait(false);
         //_logger.LogDebug("Getting Transform from Actor {actor}", gameObject.Name.TextValue);
 
+        if (data.Item1 == null || data.Item2 == null || data.Item3 == null) return default;
+
         return new WorldData()
         {
             PositionX = data.Item1.Value.X,
@@ -136,6 +138,7 @@ public sealed class IpcCallerBrio : IIpcCaller
 
         var applicablePose = JsonNode.Parse(pose)!;
         var currentPose = await _dalamudUtilService.RunOnFrameworkThread(() => _getPoseAsJson.Invoke(gameObject)).ConfigureAwait(false);
+        if (currentPose == null) return false;
         applicablePose["ModelDifference"] = JsonNode.Parse(JsonNode.Parse(currentPose)!["ModelDifference"]!.ToJsonString());
 
         await _dalamudUtilService.RunOnFrameworkThread(() =>

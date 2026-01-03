@@ -587,7 +587,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
         if (IsVisible && _charaHandler?.Address != nint.Zero)
         {
-            Pair.UpdateVisibleHomeWorldId(_charaHandler.GetHomeWorldId());
+            Pair.UpdateVisibleHomeWorldId(_charaHandler!.GetHomeWorldId());
         }
 
         if (_charaHandler?.Address != nint.Zero && !IsVisible)

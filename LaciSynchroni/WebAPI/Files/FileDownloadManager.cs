@@ -27,6 +27,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     private readonly ServerConfigurationManager _serverManager;
     private readonly FileTransferOrchestrator _orchestrator;
     private readonly List<ThrottledStream> _activeDownloadStreams;
+    private readonly Lock _activeDownloadStreamsLock = new();
     private readonly SemaphoreSlim _decompressGate = new(Math.Max(1, Environment.ProcessorCount / 2));
 
     public FileDownloadManager(ILogger<FileDownloadManager> logger, SyncMediator mediator,
@@ -44,7 +45,11 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         {
             try
             {
-                var streams = _activeDownloadStreams.ToList();
+                List<ThrottledStream> streams;
+                lock (_activeDownloadStreamsLock)
+                {
+                    streams = _activeDownloadStreams.ToList();
+                }
                 if (streams.Count == 0) return;
                 var newLimit = _orchestrator.DownloadLimitPerSlot();
                 Logger.LogTrace("Setting new Download Speed Limit to {newLimit}", newLimit);
@@ -62,7 +67,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
     public List<DownloadFileTransfer> CurrentDownloads { get; private set; } = [];
 
-    public bool IsDownloading => !CurrentDownloads.Any();
+    public bool IsDownloading => CurrentDownloads.Any();
 
     public static void MungeBuffer(Span<byte> buffer)
     {
@@ -130,7 +135,12 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     protected override void Dispose(bool disposing)
     {
         ClearDownload();
-        foreach (var stream in _activeDownloadStreams.ToList())
+        List<ThrottledStream> streamsToDispose;
+        lock (_activeDownloadStreamsLock)
+        {
+            streamsToDispose = _activeDownloadStreams.ToList();
+        }
+        foreach (var stream in streamsToDispose)
         {
             try
             {
@@ -265,7 +275,10 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 var limit = _orchestrator.DownloadLimitPerSlot();
                 Logger.LogTrace("Starting Download of {id} with a speed limit of {limit} to {tempPath}", requestId, limit, tempPath);
                 stream = new ThrottledStream(await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false), limit);
-                _activeDownloadStreams.Add(stream);
+                lock (_activeDownloadStreamsLock)
+                {
+                    _activeDownloadStreams.Add(stream);
+                }
                 while ((bytesRead = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -284,7 +297,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             try
             {
@@ -301,9 +314,13 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         {
             if (stream != null)
             {
-                _activeDownloadStreams.Remove(stream);
+                lock (_activeDownloadStreamsLock)
+                {
+                    _activeDownloadStreams.Remove(stream);
+                }
                 await stream.DisposeAsync().ConfigureAwait(false);
             }
+            response?.Dispose();
         }
     }
 
@@ -752,7 +769,10 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 var limit = _orchestrator.DownloadLimitPerSlot();
                 Logger.LogTrace("Starting Download with a speed limit of {Limit} to {TempPath}", limit, destinationFilename);
                 stream = new ThrottledStream(await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false), limit);
-                _activeDownloadStreams.Add(stream);
+                lock (_activeDownloadStreamsLock)
+                {
+                    _activeDownloadStreams.Add(stream);
+                }
 
                 while ((bytesRead = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
                 {
@@ -769,7 +789,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             try
             {
@@ -786,9 +806,13 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         {
             if (stream != null)
             {
-                _activeDownloadStreams.Remove(stream);
+                lock (_activeDownloadStreamsLock)
+                {
+                    _activeDownloadStreams.Remove(stream);
+                }
                 await stream.DisposeAsync().ConfigureAwait(false);
             }
+            response?.Dispose();
         }
     }
 
@@ -805,7 +829,14 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         else
             response = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Get, FilesRoutes.ServerFilesGetSizesFullPath(fileCdnUri), hashes, ct).ConfigureAwait(false);
 
-        return await response.Content.ReadFromJsonAsync<List<DownloadFileDto>>(cancellationToken: ct).ConfigureAwait(false) ?? [];
+        try
+        {
+            return await response.Content.ReadFromJsonAsync<List<DownloadFileDto>>(cancellationToken: ct).ConfigureAwait(false) ?? [];
+        }
+        finally
+        {
+            response?.Dispose();
+        }
     }
 
     private void PersistFileToStorage(string fileHash, string filePath)

@@ -117,9 +117,8 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
         {
             return;
         }
-        
-        // TODO: remove this temporary config migration stuff
-        // Attempt to find the hub URI by trying possible old/new hubs
+
+        // Attempt to find the hub URI by trying possible old/new hub endpoints
         _serverState = ServerState.Connecting;
         var hubUri = await FindHubUrl().ConfigureAwait(false);
         if (hubUri.IsNullOrEmpty())
@@ -243,7 +242,7 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
         {
             baseUri = baseUri.Remove(baseUri.Length - 1);
         }
-        
+
         // Essentially, we try every hub we are aware of plus the configured hub to see if we can find a connection
         var hubsToCheck = new[] { configuredHubUri, baseUri + IServerHub.Path, baseUri + "/mare" };
         foreach (var hubToCheck in hubsToCheck)

@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <!-- Run analyzers in Debug builds for code quality feedback during development -->
+    <!-- Disable analyzers in Release builds for faster CI/release builds -->
+    <RunAnalyzers Condition="'$(Configuration)' == 'Debug'">true</RunAnalyzers>
+    <RunAnalyzers Condition="'$(Configuration)' == 'Release'">false</RunAnalyzers>
+  </PropertyGroup>
+</Project>

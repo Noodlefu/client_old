@@ -1,4 +1,4 @@
-﻿using Dalamud.Plugin;
+using Dalamud.Plugin;
 using LaciSynchroni.PlayerData.Handlers;
 using LaciSynchroni.Services;
 using LaciSynchroni.Services.Mediator;
@@ -12,13 +12,10 @@ using System.Globalization;
 
 namespace LaciSynchroni.Interop.Ipc;
 
-public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCaller
+public sealed class IpcCallerPenumbra : IpcCallerBase
 {
-    private readonly IDalamudPluginInterface _pi;
-    private readonly DalamudUtilService _dalamudUtil;
     private readonly SyncMediator _syncMediator;
     private readonly RedrawManager _redrawManager;
-    private bool _shownPenumbraUnavailable = false;
     private string? _penumbraModDirectory;
     public string? ModDirectory
     {
@@ -54,11 +51,15 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
     private readonly ResolvePlayerPathsAsync _penumbraResolvePaths;
     private readonly GetGameObjectResourcePaths _penumbraResourcePaths;
 
+    // IpcCallerBase overrides
+    protected override string TargetPluginName => "Penumbra";
+    protected override Version? MinimumVersion => new(1, 2, 0, 22);
+    protected override bool ShowUnavailableNotification => true;
+    protected override bool UsePluginListVersionCheck => true;
+
     public IpcCallerPenumbra(ILogger<IpcCallerPenumbra> logger, IDalamudPluginInterface pi, DalamudUtilService dalamudUtil,
-        SyncMediator syncMediator, RedrawManager redrawManager) : base(logger, syncMediator)
+        SyncMediator syncMediator, RedrawManager redrawManager) : base(logger, pi, dalamudUtil, syncMediator)
     {
-        _pi = pi;
-        _dalamudUtil = dalamudUtil;
         _syncMediator = syncMediator;
         _redrawManager = redrawManager;
         _penumbraInit = Initialized.Subscriber(pi, PenumbraInit);
@@ -91,47 +92,26 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
         {
             _penumbraRedraw.Invoke(msg.Character.ObjectIndex, RedrawType.AfterGPose);
         });
-
-        Mediator.Subscribe<DalamudLoginMessage>(this, (msg) => _shownPenumbraUnavailable = false);
     }
 
-    public bool APIAvailable { get; private set; } = false;
-
-    public void CheckAPI()
+    protected override bool CheckPluginReady()
     {
-        bool penumbraAvailable = false;
         try
         {
-            var penumbraVersion = (_pi.InstalledPlugins
-                .FirstOrDefault(p => string.Equals(p.InternalName, "Penumbra", StringComparison.OrdinalIgnoreCase))
-                ?.Version ?? new Version(0, 0, 0, 0));
-            penumbraAvailable = penumbraVersion >= new Version(1, 2, 0, 22);
-            try
-            {
-                penumbraAvailable &= _penumbraEnabled.Invoke();
-            }
-            catch
-            {
-                penumbraAvailable = false;
-            }
-            _shownPenumbraUnavailable = _shownPenumbraUnavailable && !penumbraAvailable;
-            APIAvailable = penumbraAvailable;
+            return _penumbraEnabled.Invoke();
         }
         catch
         {
-            APIAvailable = penumbraAvailable;
+            return false;
         }
-        finally
-        {
-            if (!penumbraAvailable && !_shownPenumbraUnavailable)
-            {
-                _shownPenumbraUnavailable = true;
-                _syncMediator.Publish(new NotificationMessage("Penumbra inactive",
-                    "Your Penumbra installation is not active or out of date." +
-                    $" Update Penumbra and/or the Enable Mods setting in Penumbra to continue to use {_dalamudUtil.GetPluginName()}. If you just updated Penumbra, ignore this message.",
-                    NotificationType.Error));
-            }
-        }
+    }
+
+    protected override void PublishUnavailableNotification()
+    {
+        Mediator.Publish(new NotificationMessage("Penumbra inactive",
+            "Your Penumbra installation is not active or out of date." +
+            $" Update Penumbra and/or the Enable Mods setting in Penumbra to continue to use {DalamudUtil.GetPluginName()}. If you just updated Penumbra, ignore this message.",
+            NotificationType.Error));
     }
 
     public void CheckModDirectory()
@@ -163,7 +143,7 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
     {
         if (!APIAvailable) return;
 
-        await _dalamudUtil.RunOnFrameworkThread(() =>
+        await DalamudUtil.RunOnFrameworkThread(() =>
         {
             var retAssign = _penumbraAssignTemporaryCollection.Invoke(collName, idx, forceAssignment: true);
             logger.LogTrace("Assigning Temp Collection {CollName} to index {Idx}, Success: {Ret}", collName, idx, retAssign);
@@ -204,9 +184,9 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
         }
         _syncMediator.Publish(new ResumeScanMessage(nameof(ConvertTextureFiles)));
 
-        await _dalamudUtil.RunOnFrameworkThread(async () =>
+        await DalamudUtil.RunOnFrameworkThread(async () =>
         {
-            var gameObject = await _dalamudUtil.CreateGameObjectAsync(await _dalamudUtil.GetPlayerPointerAsync().ConfigureAwait(false)).ConfigureAwait(false);
+            var gameObject = await DalamudUtil.CreateGameObjectAsync(await DalamudUtil.GetPlayerPointerAsync().ConfigureAwait(false)).ConfigureAwait(false);
             _penumbraRedraw.Invoke(gameObject!.ObjectIndex, setting: RedrawType.Redraw);
         }).ConfigureAwait(false);
     }
@@ -215,10 +195,10 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
     {
         if (!APIAvailable) return Guid.Empty;
 
-        return await _dalamudUtil.RunOnFrameworkThread(() =>
+        return await DalamudUtil.RunOnFrameworkThread(() =>
         {
             var collName = "Laci_" + uid;
-            var _error = _penumbraCreateNamedTemporaryCollection.Invoke(_dalamudUtil.PluginInternalName, collName, out var collId);
+            var _error = _penumbraCreateNamedTemporaryCollection.Invoke(DalamudUtil.PluginInternalName, collName, out var collId);
 
             if (_error != PenumbraApiEc.Success)
             {
@@ -236,7 +216,7 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
     {
         if (!APIAvailable) return null;
 
-        return await _dalamudUtil.RunOnFrameworkThread(() =>
+        return await DalamudUtil.RunOnFrameworkThread(() =>
         {
             logger.LogTrace("Calling On IPC: Penumbra.GetGameObjectResourcePaths");
             var idx = handler.GetGameObject()?.ObjectIndex;
@@ -253,7 +233,7 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
 
     public async Task RedrawAsync(ILogger logger, GameObjectHandler handler, Guid applicationId, CancellationToken token)
     {
-        if (!APIAvailable || _dalamudUtil.IsZoning) return;
+        if (!APIAvailable || DalamudUtil.IsZoning) return;
         try
         {
             await _redrawManager.RedrawSemaphore.WaitAsync(token).ConfigureAwait(false);
@@ -273,7 +253,7 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
     public async Task RemoveTemporaryCollectionAsync(ILogger logger, Guid applicationId, Guid collId)
     {
         if (!APIAvailable) return;
-        await _dalamudUtil.RunOnFrameworkThread(() =>
+        await DalamudUtil.RunOnFrameworkThread(() =>
         {
             logger.LogTrace("[{ApplicationId}] Removing temp collection for {CollId}", applicationId, collId);
             var ret2 = _penumbraRemoveTemporaryCollection.Invoke(collId);
@@ -290,7 +270,7 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
     {
         if (!APIAvailable) return;
 
-        await _dalamudUtil.RunOnFrameworkThread(() =>
+        await DalamudUtil.RunOnFrameworkThread(() =>
         {
             logger.LogTrace("[{ApplicationId}] Manip: {Data}", applicationId, manipulationData);
             var retAdd = _penumbraAddTemporaryMod.Invoke("LaciChara_Meta", collId, [], manipulationData, 0);
@@ -302,7 +282,7 @@ public sealed class IpcCallerPenumbra : DisposableMediatorSubscriberBase, IIpcCa
     {
         if (!APIAvailable) return;
 
-        await _dalamudUtil.RunOnFrameworkThread(() =>
+        await DalamudUtil.RunOnFrameworkThread(() =>
         {
             foreach (var mod in modPaths)
             {

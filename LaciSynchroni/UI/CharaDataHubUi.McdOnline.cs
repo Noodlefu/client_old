@@ -1,4 +1,4 @@
-﻿using Dalamud.Bindings.ImGui;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
@@ -464,7 +464,7 @@ internal sealed partial class CharaDataHubUi
             }
             else
             {
-                var desc = pose.Description;
+                var desc = pose.Description ?? string.Empty;
                 if (ImGui.InputTextWithHint("##description", "Description", ref desc, 100))
                 {
                     pose.Description = desc;
@@ -521,7 +521,7 @@ internal sealed partial class CharaDataHubUi
                 UiSharedService.AttachToolTip(tooltipText);
                 if (hasWorldData && ImGui.IsItemClicked(ImGuiMouseButton.Left))
                 {
-                    _dalamudUtilService.SetMarkerAndOpenMap(position: new Vector3(worldData.Value.PositionX, worldData.Value.PositionY, worldData.Value.PositionZ),
+                    _dalamudUtilService.SetMarkerAndOpenMap(position: new Vector3(worldData!.Value.PositionX, worldData.Value.PositionY, worldData.Value.PositionZ),
                         _dalamudUtilService.MapData.Value[worldData.Value.LocationInfo.MapId].Map);
                 }
                 ImGui.SameLine();
@@ -577,7 +577,7 @@ internal sealed partial class CharaDataHubUi
             + "There would be a bit too much to explain here on what you can do here in its entirety, however, all elements in this tab have help texts attached what they are used for. Please review them carefully." + Environment.NewLine + Environment.NewLine
             + "Be mindful that when you share your Character Data with other people there is a chance that, with the help of unsanctioned 3rd party plugins, your appearance could be stolen irreversibly, just like when using MCDF.");
 
-        if(!_apiController.ConnectedServerIndexes.Any())
+        if (!_apiController.ConnectedServerIndexes.Any())
         {
             ImGuiHelpers.ScaledDummy(5);
             UiSharedService.DrawGroupedCenteredColorText("No server is currently connected, please connect to a server to use Character Data Online.", ImGuiColors.DalamudYellow);

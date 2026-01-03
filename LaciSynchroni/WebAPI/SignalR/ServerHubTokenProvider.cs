@@ -58,7 +58,7 @@ public sealed class ServerHubTokenProvider : IDisposable, IMediatorSubscriber
     {
         Uri tokenUri;
         string response = string.Empty;
-        HttpResponseMessage result;
+        HttpResponseMessage? result = null;
 
         try
         {
@@ -87,7 +87,7 @@ public sealed class ServerHubTokenProvider : IDisposable, IMediatorSubscriber
                     tokenUri = AuthRoutes.AuthWithOauthFullPath(new Uri(ServerToUse.GetAuthServerUri()
                         .Replace("wss://", "https://", StringComparison.OrdinalIgnoreCase)
                         .Replace("ws://", "http://", StringComparison.OrdinalIgnoreCase)));
-                    HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, tokenUri.ToString());
+                    using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, tokenUri.ToString());
                     request.Content = new FormUrlEncodedContent([
                         new KeyValuePair<string, string>("uid", identifier.UID),
                         new KeyValuePair<string, string>("charaIdent", identifier.CharaHash)
@@ -106,7 +106,7 @@ public sealed class ServerHubTokenProvider : IDisposable, IMediatorSubscriber
                 tokenUri = AuthRoutes.RenewTokenFullPath(new Uri(ServerToUse.GetAuthServerUri()
                     .Replace("wss://", "https://", StringComparison.OrdinalIgnoreCase)
                     .Replace("ws://", "http://", StringComparison.OrdinalIgnoreCase)));
-                HttpRequestMessage request = new(HttpMethod.Get, tokenUri.ToString());
+                using HttpRequestMessage request = new(HttpMethod.Get, tokenUri.ToString());
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _tokenCache[identifier]);
                 result = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
             }
@@ -136,6 +136,10 @@ public sealed class ServerHubTokenProvider : IDisposable, IMediatorSubscriber
             }
 
             throw;
+        }
+        finally
+        {
+            result?.Dispose();
         }
 
         var handler = new JwtSecurityTokenHandler();
@@ -278,11 +282,11 @@ public sealed class ServerHubTokenProvider : IDisposable, IMediatorSubscriber
         var tokenUri = AuthRoutes.RenewOAuthTokenFullPath(new Uri(currentServer.GetAuthServerUri()
             .Replace("wss://", "https://", StringComparison.OrdinalIgnoreCase)
             .Replace("ws://", "http://", StringComparison.OrdinalIgnoreCase)));
-        HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, tokenUri.ToString());
+        using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, tokenUri.ToString());
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", oauth2.Value.OAuthToken);
         _logger.LogInformation("Sending Request to server with auth {auth}",
             string.Join("", oauth2.Value.OAuthToken.Take(10)));
-        var result = await _httpClient.SendAsync(request).ConfigureAwait(false);
+        using var result = await _httpClient.SendAsync(request).ConfigureAwait(false);
 
         if (!result.IsSuccessStatusCode)
         {

@@ -14,21 +14,20 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace LaciSynchroni.UI;
+
 internal class RulesUI : WindowMediatorSubscriberBase
 {
-    private readonly ILogger<ServerJoinConfirmationUI> _logger;
     private readonly UiSharedService _uiSharedService;
 
-    private string _rules;
+    private string? _rules;
 
     public RulesUI(
-    ILogger<ServerJoinConfirmationUI> logger,
+    ILogger<RulesUI> logger,
     SyncMediator mediator,
     UiSharedService uiSharedService,
     PerformanceCollectorService performanceCollectorService)
     : base(logger, mediator, "Accept Rules###LaciSynchroniAcceptRulesConfirmation", performanceCollectorService)
     {
-        _logger = logger;
         _uiSharedService = uiSharedService;
 
         SizeConstraints = new()

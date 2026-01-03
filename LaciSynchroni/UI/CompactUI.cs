@@ -55,7 +55,6 @@ public class CompactUi : WindowMediatorSubscriberBase
     private string _lastAddedUserComment = string.Empty;
     private Vector2 _lastPosition = Vector2.One;
     private Vector2 _lastSize = Vector2.One;
-    private int _secretKeyIdx = -1;
     private bool _showModalForUserAddition;
     private float _transferPartHeight;
     private bool _wasOpen;
@@ -370,7 +369,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         {
             ToggleMultiServerSelect();
         }
-        
+
 
         var rectMax = new Vector2(ImGui.GetWindowContentRegionMax().X, ImGui.GetCursorPosY()) + ImGui.GetWindowPos();
 
@@ -537,12 +536,12 @@ public class CompactUi : WindowMediatorSubscriberBase
                 UiSharedService.AttachToolTip("Click to copy");
             }
         }
-        else if(status is ServerState.Connecting or ServerState.Reconnecting)
+        else if (status is ServerState.Connecting or ServerState.Reconnecting)
         {
             UiSharedService.ColorTextWrapped("Connecting", statusColor);
             UiSharedService.AttachToolTip(GetServerErrorByState(status, null));
         }
-        else if(status is ServerState.Offline or ServerState.Disconnected or ServerState.Disconnecting)
+        else if (status is ServerState.Offline or ServerState.Disconnected or ServerState.Disconnecting)
         {
             UiSharedService.ColorTextWrapped("Not Connected", statusColor);
             UiSharedService.AttachToolTip(GetServerErrorByState(status, null));
@@ -962,12 +961,12 @@ public class CompactUi : WindowMediatorSubscriberBase
             ServerState.Offline => ImGuiColors.ParsedGrey,
             ServerState.Disconnected => ImGuiColors.ParsedGrey,
             ServerState.NoAutoLogon => ImGuiColors.ParsedGrey,
-            
+
             // Something in limbo, like connection pending
             ServerState.Connecting => ImGuiColors.DalamudYellow,
             ServerState.Reconnecting => ImGuiColors.DalamudYellow,
             ServerState.Disconnecting => ImGuiColors.DalamudYellow,
-          
+
             // All these are actual errors that the user has to do something about
             ServerState.Unauthorized => ImGuiColors.DalamudRed,
             ServerState.VersionMisMatch => ImGuiColors.DalamudRed,

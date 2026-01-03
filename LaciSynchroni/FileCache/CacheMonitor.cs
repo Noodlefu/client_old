@@ -1,5 +1,6 @@
-﻿using LaciSynchroni.Interop.Ipc;
+using LaciSynchroni.Interop.Ipc;
 using LaciSynchroni.Services;
+using LaciSynchroni.Services.Infrastructure;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.Utils;
@@ -12,6 +13,7 @@ namespace LaciSynchroni.FileCache;
 
 public sealed class CacheMonitor : DisposableMediatorSubscriberBase
 {
+    private readonly BackgroundTaskTracker _taskTracker;
     private readonly SyncConfigService _configService;
     private readonly DalamudUtilService _dalamudUtil;
     private readonly FileCompactor _fileCompactor;
@@ -25,8 +27,9 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
 
     public CacheMonitor(ILogger<CacheMonitor> logger, IpcManager ipcManager, SyncConfigService configService,
         FileCacheManager fileDbManager, SyncMediator mediator, PerformanceCollectorService performanceCollector, DalamudUtilService dalamudUtil,
-        FileCompactor fileCompactor) : base(logger, mediator)
+        FileCompactor fileCompactor, BackgroundTaskTracker taskTracker) : base(logger, mediator)
     {
+        _taskTracker = taskTracker;
         _ipcManager = ipcManager;
         _configService = configService;
         _fileDbManager = fileDbManager;
@@ -63,10 +66,9 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
         }
 
         var token = _periodicCalculationTokenSource.Token;
-        _ = Task.Run(async () =>
+        _taskTracker.Run(async () =>
         {
             Logger.LogInformation("Starting Periodic Storage Directory Calculation Task");
-            var token = _periodicCalculationTokenSource.Token;
             while (!token.IsCancellationRequested)
             {
                 try
@@ -84,7 +86,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
                 }
                 await Task.Delay(TimeSpan.FromMinutes(1), token).ConfigureAwait(false);
             }
-        }, token);
+        }, "CacheMonitor.PeriodicCalculation", token);
     }
 
     public long CurrentFileProgress => _currentFileProgress;
@@ -155,7 +157,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
 
         if (!AllowedFileExtensions.Any(ext => e.FullPath.EndsWith(ext, StringComparison.OrdinalIgnoreCase))) return;
 
-        lock (_watcherChanges)
+        lock (_syncChanges)
         {
             _syncChanges[e.FullPath] = new WatcherChange(e.ChangeType);
         }
@@ -355,7 +357,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
         _currentFileProgress = 0;
         _scanCancellationTokenSource = _scanCancellationTokenSource?.CancelRecreate() ?? new CancellationTokenSource();
         var token = _scanCancellationTokenSource.Token;
-        _ = Task.Run(async () =>
+        _taskTracker.Run(async () =>
         {
             Logger.LogDebug("Starting Full File Scan");
             TotalFiles = 0;
@@ -388,7 +390,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
             }
             TotalFiles = 0;
             _currentFileProgress = 0;
-        }, token);
+        }, "CacheMonitor.FullFileScan", token);
     }
 
     public void RecalculateFileCacheSize(CancellationToken token)
@@ -541,48 +543,45 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
         // scan files from database
         var threadCount = Math.Clamp((int)(Environment.ProcessorCount / 2.0f), 2, 8);
 
-        List<FileCacheEntity> entitiesToRemove = [];
-        List<FileCacheEntity> entitiesToUpdate = [];
-        object sync = new();
-        Thread[] workerThreads = new Thread[threadCount];
+        ConcurrentBag<FileCacheEntity> entitiesToRemove = [];
+        ConcurrentBag<FileCacheEntity> entitiesToUpdate = [];
 
-        ConcurrentQueue<FileCacheEntity> fileCaches = new(_fileDbManager.GetAllFileCaches());
+        var fileCaches = _fileDbManager.GetAllFileCaches().ToList();
 
         TotalFilesStorage = fileCaches.Count;
 
-        for (int i = 0; i < threadCount; i++)
+        try
         {
-            Logger.LogTrace("Creating Thread {i}", i);
-            workerThreads[i] = new((tcounter) =>
-            {
-                var threadNr = (int)tcounter!;
-                Logger.LogTrace("Spawning Worker Thread {i}", threadNr);
-                while (!ct.IsCancellationRequested && fileCaches.TryDequeue(out var workload))
+            Parallel.ForEach(fileCaches,
+                new ParallelOptions
                 {
+                    MaxDegreeOfParallelism = threadCount,
+                    CancellationToken = ct
+                },
+                workload =>
+                {
+                    if (!_ipcManager.Penumbra.APIAvailable)
+                    {
+                        Logger.LogWarning("Penumbra not available");
+                        return;
+                    }
+
                     try
                     {
-                        if (ct.IsCancellationRequested) return;
-
-                        if (!_ipcManager.Penumbra.APIAvailable)
-                        {
-                            Logger.LogWarning("Penumbra not available");
-                            return;
-                        }
-
                         var validatedCacheResult = _fileDbManager.ValidateFileCacheEntity(workload);
                         if (validatedCacheResult.State != FileState.RequireDeletion)
                         {
-                            lock (sync) { allScannedFiles[validatedCacheResult.FileCache.ResolvedFilepath] = true; }
+                            lock (allScannedFiles) { allScannedFiles[validatedCacheResult.FileCache.ResolvedFilepath] = true; }
                         }
                         if (validatedCacheResult.State == FileState.RequireUpdate)
                         {
                             Logger.LogTrace("To update: {path}", validatedCacheResult.FileCache.ResolvedFilepath);
-                            lock (sync) { entitiesToUpdate.Add(validatedCacheResult.FileCache); }
+                            entitiesToUpdate.Add(validatedCacheResult.FileCache);
                         }
                         else if (validatedCacheResult.State == FileState.RequireDeletion)
                         {
                             Logger.LogTrace("To delete: {path}", validatedCacheResult.FileCache.ResolvedFilepath);
-                            lock (sync) { entitiesToRemove.Add(validatedCacheResult.FileCache); }
+                            entitiesToRemove.Add(validatedCacheResult.FileCache);
                         }
                     }
                     catch (Exception ex)
@@ -590,20 +589,11 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
                         Logger.LogWarning(ex, "Failed validating {path}", workload.ResolvedFilepath);
                     }
                     Interlocked.Increment(ref _currentFileProgress);
-                }
-
-                Logger.LogTrace("Ending Worker Thread {i}", threadNr);
-            })
-            {
-                Priority = ThreadPriority.Lowest,
-                IsBackground = true
-            };
-            workerThreads[i].Start(i);
+                });
         }
-
-        while (!ct.IsCancellationRequested && workerThreads.Any(u => u.IsAlive))
+        catch (OperationCanceledException)
         {
-            Thread.Sleep(1000);
+            return;
         }
 
         if (ct.IsCancellationRequested) return;
@@ -616,7 +606,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
             return;
         }
 
-        if (entitiesToUpdate.Any() || entitiesToRemove.Any())
+        if (!entitiesToUpdate.IsEmpty || !entitiesToRemove.IsEmpty)
         {
             foreach (var entity in entitiesToUpdate)
             {
@@ -678,8 +668,6 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
         Logger.LogDebug("Scan complete");
         TotalFiles = 0;
         _currentFileProgress = 0;
-        entitiesToRemove.Clear();
-        allScannedFiles.Clear();
 
         if (!_configService.Current.InitialScanComplete)
         {

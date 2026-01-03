@@ -82,8 +82,8 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
             _listener = new HttpListener();
             _listener.Prefixes.Add($"{PluginHttpServerData.Hostname}:{PluginHttpServerData.Port}/");
             _listener.Start();
-            
-            Task.Run(() => ListenAsync(_cancellationToken), _cancellationToken);
+
+            _ = Task.Run(() => ListenAsync(_cancellationToken), _cancellationToken);
 
             State = HttpServerState.STARTED;
 
@@ -167,12 +167,12 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
         {
             var request = context.Request;
             var response = context.Response;
-            
+
             _logger.LogInformation("Received request: {Method} {Url}", request.HttpMethod, request.Url);
 
             // Parse the request URL
             var path = request.Url?.AbsolutePath.TrimStart('/');
-            
+
             if (string.IsNullOrEmpty(path))
             {
                 await SendResponseAsync(response, 400, "Invalid request").ConfigureAwait(false);
@@ -192,7 +192,7 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
             if (string.Equals(action, "join", StringComparison.OrdinalIgnoreCase))
             {
                 HandleJoinServer(queryParams);
-                await SendResponseAsync(response, 200, 
+                await SendResponseAsync(response, 200,
                     "<html><body><h1>Success!</h1><p>Check your game - a dialog should have appeared to add the server.</p><p>You can close this tab.</p></body></html>",
                     "text/html").ConfigureAwait(false);
             }
@@ -250,12 +250,12 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
             ServerUri = normalizedUri,
             UseOAuth2 = true,
             UseAdvancedUris = false,
-            SecretKeys = { { 0, new SecretKey() { FriendlyName = $"Secret Key added on Setup ({DateTime.Now:yyyy-MM-dd})", Key = secretKey } } }
+            SecretKeys = { { 0, new SecretKey() { FriendlyName = $"Secret Key added on Setup ({DateTime.Now:yyyy-MM-dd})", Key = secretKey ?? string.Empty } } }
         };
 
         // Publish message to show confirmation UI
         Mediator.Publish(new ServerJoinRequestMessage(newServer));
-        
+
         _logger.LogInformation("Server join request created for {ServerUri}", normalizedUri);
     }
 
@@ -283,6 +283,6 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
 public record ServerJoinRequestMessage(ServerStorage ServerStorage) : MessageBase;
 
 /// <summary>
-/// Message published when the state of the 
+/// Message published when the state of the
 /// </summary>
 public record HttpServerToggleMessage(bool enable) : MessageBase;

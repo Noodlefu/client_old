@@ -1,4 +1,4 @@
-﻿namespace LaciSynchroni.WebAPI.Files
+namespace LaciSynchroni.WebAPI.Files
 {
     /// <summary>
     ///     Class for streaming data with throttling support.
@@ -9,7 +9,7 @@
         public static long Infinite => long.MaxValue;
         private readonly Stream _baseStream;
         private long _bandwidthLimit;
-        private Bandwidth _bandwidth;
+        private Bandwidth? _bandwidth;
         private CancellationTokenSource _bandwidthChangeTokenSource = new CancellationTokenSource();
 
         /// <summary>
@@ -127,8 +127,8 @@
             if (BandwidthLimit > 0 && transmissionVolume > 0)
             {
                 // Calculate the time to sleep.
-                _bandwidth.CalculateSpeed(transmissionVolume);
-                await Sleep(_bandwidth.PopSpeedRetrieveTime(), token).ConfigureAwait(false);
+                _bandwidth?.CalculateSpeed(transmissionVolume);
+                await Sleep(_bandwidth!.PopSpeedRetrieveTime(), token).ConfigureAwait(false);
             }
         }
 

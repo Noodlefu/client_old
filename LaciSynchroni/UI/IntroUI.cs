@@ -67,8 +67,6 @@ public partial class IntroUi : WindowMediatorSubscriberBase
         });
     }
 
-    private int _prevIdx = -1;
-
     protected override void DrawInternal()
     {
         if (_uiShared.IsInGpose) return;

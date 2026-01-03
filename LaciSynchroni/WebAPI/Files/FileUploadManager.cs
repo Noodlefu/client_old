@@ -1,4 +1,4 @@
-﻿using LaciSynchroni.Common.Data;
+using LaciSynchroni.Common.Data;
 using LaciSynchroni.Common.Dto.Files;
 using LaciSynchroni.Common.Routes;
 using LaciSynchroni.FileCache;
@@ -147,7 +147,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
             FileHashes = hashes,
             UIDs = uids
         };
-        var response = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Post, FilesRoutes.ServerFilesFilesSendFullPath(uri), filesSendDto, ct).ConfigureAwait(false);
+        using var response = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Post, FilesRoutes.ServerFilesFilesSendFullPath(uri), filesSendDto, ct).ConfigureAwait(false);
         return await response.Content.ReadFromJsonAsync<List<UploadFileDto>>(cancellationToken: ct).ConfigureAwait(false) ?? [];
     }
 
@@ -236,6 +236,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         else
             response = await _orchestrator.SendRequestStreamAsync(serverIndex, HttpMethod.Post, FilesRoutes.ServerFilesUploadMunged(uri, fileHash), streamContent, uploadToken).ConfigureAwait(false);
         Logger.LogDebug("[{hash}] Upload Status: {status}", fileHash, response.StatusCode);
+        response.Dispose();
     }
 
     private async Task UploadUnverifiedFiles(int serverIndex, HashSet<string> unverifiedUploadHashes, List<UserData> visiblePlayers, CancellationToken uploadToken)
