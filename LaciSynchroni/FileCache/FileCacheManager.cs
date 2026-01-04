@@ -324,12 +324,18 @@ public sealed class FileCacheManager : IHostedService
                     // Signal all waiters to retry - one of them will become the new downloader
                     info.Tcs.SetException(new DownloadHandoffException());
                 }
-                else
+                else if (hasOtherWaiters)
                 {
-                    // No handoff possible - propagate the failure to all waiters
+                    // Propagate the failure to all waiters
                     _pendingDownloads.TryRemove(hash, out _);
                     _logger.LogTrace("Failed download for {Hash} with exception {Exception}", hash, exception.Message);
                     info.Tcs.SetException(exception);
+                }
+                else
+                {
+                    // No waiters - just clean up without setting exception to avoid unobserved task exception
+                    _pendingDownloads.TryRemove(hash, out _);
+                    _logger.LogTrace("Failed download for {Hash} with no waiters, cleaning up", hash);
                 }
             }
             else
