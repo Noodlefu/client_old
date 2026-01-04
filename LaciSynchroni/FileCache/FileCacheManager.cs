@@ -30,8 +30,29 @@ public sealed class FileCacheManager : IHostedService
     /// <summary>
     /// Tracks pending file downloads by hash. When a download is in progress for a hash,
     /// other requesters will wait on the TaskCompletionSource instead of starting duplicate downloads.
+    /// The value contains the TCS and a count of how many tasks are interested in this download.
     /// </summary>
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<string?>> _pendingDownloads = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, PendingDownloadInfo> _pendingDownloads = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Lock for coordinating pending download handoffs.
+    /// </summary>
+    private readonly Lock _pendingDownloadsLock = new();
+
+    /// <summary>
+    /// Tracks information about a pending download, including waiter count for handoff support.
+    /// </summary>
+    private sealed class PendingDownloadInfo
+    {
+        public TaskCompletionSource<string?> Tcs { get; set; }
+        public int WaiterCount { get; set; }
+
+        public PendingDownloadInfo(TaskCompletionSource<string?> tcs)
+        {
+            Tcs = tcs;
+            WaiterCount = 1; // The downloader counts as 1
+        }
+    }
 
     public string CacheFolder => _configService.Current.CacheFolder;
 
@@ -171,83 +192,150 @@ public sealed class FileCacheManager : IHostedService
     /// If the file already exists, returns immediately with the existing path.
     /// If another download is in progress for this hash, waits for it to complete.
     /// If no download is in progress, grants the caller the right to download and returns shouldDownload=true.
+    ///
+    /// When the downloader cancels, the download is handed off to another waiter if one exists,
+    /// preventing the scenario where Character A's cancellation causes Character B to fail.
     /// </summary>
     /// <param name="hash">The file hash to acquire</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>A tuple indicating whether the caller should download the file, and the existing path if available</returns>
     public async Task<(bool ShouldDownload, string? ExistingPath)> AcquireFileAsync(string hash, CancellationToken ct)
     {
-        // First check if file already exists in cache
-        var existing = GetFileCacheByHash(hash);
-        if (existing != null)
+        while (true)
         {
-            _logger.LogTrace("File {Hash} already exists in cache at {Path}", hash, existing.ResolvedFilepath);
-            return (false, existing.ResolvedFilepath);
-        }
+            ct.ThrowIfCancellationRequested();
 
-        // Try to become the downloader for this hash
-        var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (_pendingDownloads.TryAdd(hash, tcs))
-        {
-            _logger.LogTrace("Acquired download rights for {Hash}", hash);
-            return (true, null); // We're responsible for downloading
-        }
+            // First check if file already exists in cache
+            var existing = GetFileCacheByHash(hash);
+            if (existing != null)
+            {
+                _logger.LogTrace("File {Hash} already exists in cache at {Path}", hash, existing.ResolvedFilepath);
+                return (false, existing.ResolvedFilepath);
+            }
 
-        // Another download is in progress - wait for it
-        _logger.LogTrace("Waiting for pending download of {Hash}", hash);
-        try
-        {
-            var path = await _pendingDownloads[hash].Task.WaitAsync(ct).ConfigureAwait(false);
-            _logger.LogTrace("Pending download of {Hash} completed with path {Path}", hash, path);
-            return (false, path);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogTrace("Wait for pending download of {Hash} was cancelled", hash);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error waiting for pending download of {Hash}", hash);
-            throw;
+            PendingDownloadInfo? existingInfo;
+            lock (_pendingDownloadsLock)
+            {
+                // Try to become the downloader for this hash
+                if (!_pendingDownloads.TryGetValue(hash, out existingInfo))
+                {
+                    var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var info = new PendingDownloadInfo(tcs);
+                    _pendingDownloads[hash] = info;
+                    _logger.LogTrace("Acquired download rights for {Hash}", hash);
+                    return (true, null); // We're responsible for downloading
+                }
+
+                // Another download is in progress - increment waiter count and wait
+                existingInfo.WaiterCount++;
+                _logger.LogTrace("Waiting for pending download of {Hash} (waiter count: {Count})", hash, existingInfo.WaiterCount);
+            }
+
+            try
+            {
+                var path = await existingInfo.Tcs.Task.WaitAsync(ct).ConfigureAwait(false);
+                _logger.LogTrace("Pending download of {Hash} completed with path {Path}", hash, path);
+                return (false, path);
+            }
+            catch (DownloadHandoffException)
+            {
+                // The original downloader cancelled but we should retry to become the new downloader
+                _logger.LogTrace("Download handoff for {Hash}, retrying to acquire", hash);
+                // Loop back to try again - we might become the new downloader
+                continue;
+            }
+            catch (OperationCanceledException)
+            {
+                // Our own cancellation - decrement waiter count and propagate
+                lock (_pendingDownloadsLock)
+                {
+                    if (_pendingDownloads.TryGetValue(hash, out var info))
+                    {
+                        info.WaiterCount--;
+                        _logger.LogTrace("Waiter cancelled for {Hash} (remaining waiters: {Count})", hash, info.WaiterCount);
+                    }
+                }
+                _logger.LogTrace("Wait for pending download of {Hash} was cancelled", hash);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error waiting for pending download of {Hash}", hash);
+                throw;
+            }
         }
     }
 
     /// <summary>
-    /// Signals that a file download has completed (successfully or not).
+    /// Exception used internally to signal that a download should be handed off to a waiter.
+    /// </summary>
+    private sealed class DownloadHandoffException : Exception
+    {
+        public DownloadHandoffException() : base("Download handed off to another waiter") { }
+    }
+
+    /// <summary>
+    /// Signals that a file download has completed successfully.
     /// Must be called after AcquireFileAsync returns shouldDownload=true.
     /// </summary>
     /// <param name="hash">The file hash that was being downloaded</param>
-    /// <param name="filePath">The path to the downloaded file, or null if the download failed</param>
+    /// <param name="filePath">The path to the downloaded file</param>
     public void CompleteFileDownload(string hash, string? filePath)
     {
-        if (_pendingDownloads.TryRemove(hash, out var tcs))
+        lock (_pendingDownloadsLock)
         {
-            _logger.LogTrace("Completed download for {Hash} with path {Path}", hash, filePath);
-            tcs.SetResult(filePath);
-        }
-        else
-        {
-            _logger.LogWarning("CompleteFileDownload called for {Hash} but no pending download was found", hash);
+            if (_pendingDownloads.TryRemove(hash, out var info))
+            {
+                _logger.LogTrace("Completed download for {Hash} with path {Path} (waiters: {Count})", hash, filePath, info.WaiterCount);
+                info.Tcs.SetResult(filePath);
+            }
+            else
+            {
+                _logger.LogWarning("CompleteFileDownload called for {Hash} but no pending download was found", hash);
+            }
         }
     }
 
     /// <summary>
     /// Signals that a file download has failed with an exception.
     /// Must be called after AcquireFileAsync returns shouldDownload=true.
+    ///
+    /// If the failure is due to cancellation and there are other waiters,
+    /// the download will be handed off to one of them instead of failing everyone.
     /// </summary>
     /// <param name="hash">The file hash that was being downloaded</param>
     /// <param name="exception">The exception that caused the failure</param>
     public void FailFileDownload(string hash, Exception exception)
     {
-        if (_pendingDownloads.TryRemove(hash, out var tcs))
+        lock (_pendingDownloadsLock)
         {
-            _logger.LogTrace("Failed download for {Hash} with exception {Exception}", hash, exception.Message);
-            tcs.SetException(exception);
-        }
-        else
-        {
-            _logger.LogWarning("FailFileDownload called for {Hash} but no pending download was found", hash);
+            if (_pendingDownloads.TryGetValue(hash, out var info))
+            {
+                // Check if this is a cancellation and there are other waiters who could take over
+                bool isCancellation = exception is OperationCanceledException;
+                // WaiterCount > 1 means there's at least one other task waiting (besides the downloader)
+                bool hasOtherWaiters = info.WaiterCount > 1;
+
+                if (isCancellation && hasOtherWaiters)
+                {
+                    // Hand off to another waiter - remove the current entry and signal handoff
+                    _pendingDownloads.TryRemove(hash, out _);
+                    _logger.LogDebug("Download cancelled for {Hash}, handing off to one of {Count} remaining waiters", hash, info.WaiterCount - 1);
+                    // Signal all waiters to retry - one of them will become the new downloader
+                    info.Tcs.SetException(new DownloadHandoffException());
+                }
+                else
+                {
+                    // No handoff possible - propagate the failure to all waiters
+                    _pendingDownloads.TryRemove(hash, out _);
+                    _logger.LogTrace("Failed download for {Hash} with exception {Exception}", hash, exception.Message);
+                    info.Tcs.SetException(exception);
+                }
+            }
+            else
+            {
+                _logger.LogWarning("FailFileDownload called for {Hash} but no pending download was found", hash);
+            }
         }
     }
 

@@ -418,15 +418,23 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     /// Decompresses data and writes it to a file, with proper gating to prevent CPU exhaustion.
     /// Uses centralized file acquisition to prevent concurrent writes to the same file hash.
     /// </summary>
-    private async Task DecompressAndWriteFile(string fileHash, string filePath, byte[] compressedData, string downloadName)
+    /// <param name="fileHash">The hash of the file</param>
+    /// <param name="filePath">The destination file path</param>
+    /// <param name="compressedData">The compressed data to decompress and write</param>
+    /// <param name="downloadName">Name for logging purposes</param>
+    /// <param name="alreadyAcquired">If true, skips AcquireFileAsync (caller already holds the lock)</param>
+    private async Task DecompressAndWriteFile(string fileHash, string filePath, byte[] compressedData, string downloadName, bool alreadyAcquired = false)
     {
-        // Use centralized coordination to prevent duplicate downloads/writes
-        var (shouldDownload, existingPath) = await _fileDbManager.AcquireFileAsync(fileHash, CancellationToken.None).ConfigureAwait(false);
-
-        if (!shouldDownload)
+        if (!alreadyAcquired)
         {
-            Logger.LogDebug("{dlName}: File {fileHash} already available at {existingPath}, skipping write", downloadName, fileHash, existingPath);
-            return;
+            // Use centralized coordination to prevent duplicate downloads/writes
+            var (shouldDownload, existingPath) = await _fileDbManager.AcquireFileAsync(fileHash, CancellationToken.None).ConfigureAwait(false);
+
+            if (!shouldDownload)
+            {
+                Logger.LogDebug("{dlName}: File {fileHash} already available at {existingPath}, skipping write", downloadName, fileHash, existingPath);
+                return;
+            }
         }
 
         try
@@ -600,66 +608,79 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             if (!hasStatus)
                 return;
 
-            Progress<long> progress = new((bytesDownloaded) =>
+            // Acquire the right to download this file - prevents duplicate downloads when multiple
+            // characters need the same file. If another download is in progress, we wait for it.
+            // If that download cancels but we're still interested, we take over the download.
+            var (shouldDownload, existingPath) = await _fileDbManager.AcquireFileAsync(directDownload.Hash, token).ConfigureAwait(false);
+            if (!shouldDownload)
             {
-                try
-                {
-                    AddTransferredBytes(directDownloadAbsoluteUri, bytesDownloaded);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Could not set download progress");
-                }
-            });
-
-            var tempFilename = _fileDbManager.GetCacheFilePath(directDownload.Hash, "bin");
-
-            // Use slot lease pattern to ensure slot is always released
-            SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.WaitingForSlot);
-            await using var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
-
-            try
-            {
-                // Download the compressed file directly with retry logic
-                SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Downloading);
-                Logger.LogDebug("{Hash} Beginning direct download of file from {Url}", directDownload.Hash, directDownloadAbsoluteUri);
-                await DownloadFileThrottledWithRetry(serverIndex, directDownload.DownloadUri, tempFilename, progress, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                Logger.LogDebug("{Hash}: Detected cancellation of direct download, discarding file.", directDownload.Hash);
-                File.Delete(tempFilename);
-                ClearDownload();
-                return;
-            }
-            catch (Exception ex)
-            {
-                File.Delete(tempFilename);
-                Logger.LogError(ex, "{Hash}: Error during direct download.", directDownload.Hash);
-                ClearDownload();
+                Logger.LogDebug("{Hash}: File already available at {Path}, skipping download", directDownload.Hash, existingPath);
+                SetTransferredFiles(directDownloadAbsoluteUri, 1);
+                SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Decompressing);
                 return;
             }
 
-            SetTransferredFiles(directDownloadAbsoluteUri, 1);
-            SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Decompressing);
-
+            // We're responsible for downloading this file - ensure we always signal completion or failure
+            string? tempFilename = null;
             try
             {
                 var fileExtension = fileReplacement.First(f => string.Equals(f.Hash, directDownload.Hash, StringComparison.OrdinalIgnoreCase)).GamePaths[0].Split(".")[^1];
                 var finalFilename = _fileDbManager.GetCacheFilePath(directDownload.Hash, fileExtension);
-                Logger.LogDebug("Decompressing direct download {Hash} from {CompressedFile} to {FinalFile}", directDownload.Hash, tempFilename, finalFilename);
-                byte[] compressedBytes = await File.ReadAllBytesAsync(tempFilename).ConfigureAwait(false);
+                // Use a unique temp filename per download attempt to avoid file locking issues
+                tempFilename = _fileDbManager.GetCacheFilePath($"{directDownload.Hash}_{Guid.NewGuid():N}", "bin");
 
-                await DecompressAndWriteFile(directDownload.Hash, finalFilename, compressedBytes, "DirectDownload").ConfigureAwait(false);
+                Progress<long> progress = new((bytesDownloaded) =>
+                {
+                    try
+                    {
+                        AddTransferredBytes(directDownloadAbsoluteUri, bytesDownloaded);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "Could not set download progress");
+                    }
+                });
+
+                // Use slot lease pattern to ensure slot is always released
+                SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.WaitingForSlot);
+                await using var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
+
+                // Download the compressed file directly with retry logic
+                SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Downloading);
+                Logger.LogDebug("{Hash} Beginning direct download of file from {Url}", directDownload.Hash, directDownloadAbsoluteUri);
+                await DownloadFileThrottledWithRetry(serverIndex, directDownload.DownloadUri, tempFilename, progress, token).ConfigureAwait(false);
+
+                SetTransferredFiles(directDownloadAbsoluteUri, 1);
+                SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Decompressing);
+
+                Logger.LogDebug("Decompressing direct download {Hash} from {CompressedFile} to {FinalFile}", directDownload.Hash, tempFilename, finalFilename);
+                byte[] compressedBytes = await File.ReadAllBytesAsync(tempFilename, token).ConfigureAwait(false);
+
+                // DecompressAndWriteFile handles calling CompleteFileDownload/FailFileDownload
+                // Pass alreadyAcquired: true since we already called AcquireFileAsync before downloading
+                await DecompressAndWriteFile(directDownload.Hash, finalFilename, compressedBytes, "DirectDownload", alreadyAcquired: true).ConfigureAwait(false);
                 Logger.LogDebug("Finished direct download of {Hash}.", directDownload.Hash);
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.LogDebug("{Hash}: Detected cancellation of direct download, discarding file.", directDownload.Hash);
+                // Signal cancellation so waiters can potentially take over the download
+                _fileDbManager.FailFileDownload(directDownload.Hash, new OperationCanceledException());
+                ClearDownload();
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "{Hash} Exception downloading from {Url}", directDownload.Hash, directDownloadAbsoluteUri);
+                Logger.LogError(ex, "{Hash}: Error during direct download.", directDownload.Hash);
+                _fileDbManager.FailFileDownload(directDownload.Hash, ex);
+                ClearDownload();
             }
             finally
             {
-                File.Delete(tempFilename);
+                // Clean up temp file if it still exists
+                if (tempFilename != null)
+                {
+                    try { File.Delete(tempFilename); } catch { /* ignore */ }
+                }
             }
         });
 
