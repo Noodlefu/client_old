@@ -1,4 +1,4 @@
-﻿using LaciSynchroni.Services;
+using LaciSynchroni.Services;
 using LaciSynchroni.SyncConfiguration;
 using Microsoft.Extensions.Logging;
 using System.Runtime.InteropServices;

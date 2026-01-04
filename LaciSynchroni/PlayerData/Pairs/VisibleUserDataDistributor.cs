@@ -140,9 +140,9 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
             {
                 var dataToSend = await _fileUploadTask.ConfigureAwait(false);
 
+                await _pushDataSemaphore.WaitAsync(_runtimeCts.Token).ConfigureAwait(false);
                 try
                 {
-                    await _pushDataSemaphore.WaitAsync(_runtimeCts.Token).ConfigureAwait(false);
                     if (_usersToPushDataTo.Count == 0) return;
 
                     var serversToPushTo = _usersToPushDataTo.Select(key => key.ServerIndex).Distinct();
@@ -162,7 +162,7 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
                 }
                 catch (Exception e)
                 {
-                    Logger.LogDebug(e, "Failed to acquire lock.");
+                    Logger.LogDebug(e, "Error pushing character data.");
                 }
                 finally
                 {

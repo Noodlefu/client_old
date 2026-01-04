@@ -8,7 +8,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Threading;
 using System.Text;
 
 namespace LaciSynchroni.FileCache;
@@ -27,6 +26,13 @@ public sealed class FileCacheManager : IHostedService
     private readonly Lock _fileWriteLock = new();
     private readonly IpcManager _ipcManager;
     private readonly ILogger<FileCacheManager> _logger;
+
+    /// <summary>
+    /// Tracks pending file downloads by hash. When a download is in progress for a hash,
+    /// other requesters will wait on the TaskCompletionSource instead of starting duplicate downloads.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<string?>> _pendingDownloads = new(StringComparer.Ordinal);
+
     public string CacheFolder => _configService.Current.CacheFolder;
 
     public FileCacheManager(ILogger<FileCacheManager> logger, IpcManager ipcManager, SyncConfigService configService, SyncMediator syncMediator)
@@ -160,11 +166,96 @@ public sealed class FileCacheManager : IHostedService
         return Path.Combine(_configService.Current.CacheFolder, hash + "." + extension);
     }
 
+    /// <summary>
+    /// Attempts to acquire the right to download a file by hash.
+    /// If the file already exists, returns immediately with the existing path.
+    /// If another download is in progress for this hash, waits for it to complete.
+    /// If no download is in progress, grants the caller the right to download and returns shouldDownload=true.
+    /// </summary>
+    /// <param name="hash">The file hash to acquire</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>A tuple indicating whether the caller should download the file, and the existing path if available</returns>
+    public async Task<(bool ShouldDownload, string? ExistingPath)> AcquireFileAsync(string hash, CancellationToken ct)
+    {
+        // First check if file already exists in cache
+        var existing = GetFileCacheByHash(hash);
+        if (existing != null)
+        {
+            _logger.LogTrace("File {Hash} already exists in cache at {Path}", hash, existing.ResolvedFilepath);
+            return (false, existing.ResolvedFilepath);
+        }
+
+        // Try to become the downloader for this hash
+        var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (_pendingDownloads.TryAdd(hash, tcs))
+        {
+            _logger.LogTrace("Acquired download rights for {Hash}", hash);
+            return (true, null); // We're responsible for downloading
+        }
+
+        // Another download is in progress - wait for it
+        _logger.LogTrace("Waiting for pending download of {Hash}", hash);
+        try
+        {
+            var path = await _pendingDownloads[hash].Task.WaitAsync(ct).ConfigureAwait(false);
+            _logger.LogTrace("Pending download of {Hash} completed with path {Path}", hash, path);
+            return (false, path);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogTrace("Wait for pending download of {Hash} was cancelled", hash);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error waiting for pending download of {Hash}", hash);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Signals that a file download has completed (successfully or not).
+    /// Must be called after AcquireFileAsync returns shouldDownload=true.
+    /// </summary>
+    /// <param name="hash">The file hash that was being downloaded</param>
+    /// <param name="filePath">The path to the downloaded file, or null if the download failed</param>
+    public void CompleteFileDownload(string hash, string? filePath)
+    {
+        if (_pendingDownloads.TryRemove(hash, out var tcs))
+        {
+            _logger.LogTrace("Completed download for {Hash} with path {Path}", hash, filePath);
+            tcs.SetResult(filePath);
+        }
+        else
+        {
+            _logger.LogWarning("CompleteFileDownload called for {Hash} but no pending download was found", hash);
+        }
+    }
+
+    /// <summary>
+    /// Signals that a file download has failed with an exception.
+    /// Must be called after AcquireFileAsync returns shouldDownload=true.
+    /// </summary>
+    /// <param name="hash">The file hash that was being downloaded</param>
+    /// <param name="exception">The exception that caused the failure</param>
+    public void FailFileDownload(string hash, Exception exception)
+    {
+        if (_pendingDownloads.TryRemove(hash, out var tcs))
+        {
+            _logger.LogTrace("Failed download for {Hash} with exception {Exception}", hash, exception.Message);
+            tcs.SetException(exception);
+        }
+        else
+        {
+            _logger.LogWarning("FailFileDownload called for {Hash} but no pending download was found", hash);
+        }
+    }
+
     public async Task<(string, byte[])> GetCompressedFileData(string fileHash, CancellationToken uploadToken)
     {
         var fileCache = GetFileCacheByHash(fileHash)!.ResolvedFilepath;
-        return (fileHash, LZ4Wrapper.WrapHC(await File.ReadAllBytesAsync(fileCache, uploadToken).ConfigureAwait(false), 0,
-            (int)new FileInfo(fileCache).Length));
+        var fileBytes = await File.ReadAllBytesAsync(fileCache, uploadToken).ConfigureAwait(false);
+        return (fileHash, LZ4Wrapper.WrapHC(fileBytes, 0, (int)new FileInfo(fileCache).Length));
     }
 
     public FileCacheEntity? GetFileCacheByHash(string hash)

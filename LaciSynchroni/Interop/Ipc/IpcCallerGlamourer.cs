@@ -85,10 +85,8 @@ public sealed class IpcCallerGlamourer : IpcCallerBase
         if (!APIAvailable || string.IsNullOrEmpty(customization) || DalamudUtil.IsZoning) return;
 
         await _redrawManager.RedrawSemaphore.WaitAsync(token).ConfigureAwait(false);
-
         try
         {
-
             await _redrawManager.PenumbraRedrawInternalAsync(logger, handler, applicationId, (chara) =>
             {
                 try
@@ -132,9 +130,10 @@ public sealed class IpcCallerGlamourer : IpcCallerBase
     public async Task RevertAsync(ILogger logger, GameObjectHandler handler, Guid applicationId, CancellationToken token)
     {
         if ((!APIAvailable) || DalamudUtil.IsZoning) return;
+
+        await _redrawManager.RedrawSemaphore.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            await _redrawManager.RedrawSemaphore.WaitAsync(token).ConfigureAwait(false);
             await _redrawManager.PenumbraRedrawInternalAsync(logger, handler, applicationId, (chara) =>
             {
                 try

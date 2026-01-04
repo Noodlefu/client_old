@@ -416,37 +416,59 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
     /// <summary>
     /// Decompresses data and writes it to a file, with proper gating to prevent CPU exhaustion.
+    /// Uses centralized file acquisition to prevent concurrent writes to the same file hash.
     /// </summary>
     private async Task DecompressAndWriteFile(string fileHash, string filePath, byte[] compressedData, string downloadName)
     {
-        // Gate decompression to prevent CPU exhaustion
-        // Decompression is completed fully before releasing the gate to ensure
-        // we don't lose decompressed data if file write fails
-        byte[] decompressedFile;
-        await _decompressGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-        try
+        // Use centralized coordination to prevent duplicate downloads/writes
+        var (shouldDownload, existingPath) = await _fileDbManager.AcquireFileAsync(fileHash, CancellationToken.None).ConfigureAwait(false);
+
+        if (!shouldDownload)
         {
-            decompressedFile = LZ4Wrapper.Unwrap(compressedData);
-        }
-        finally
-        {
-            _decompressGate.Release();
+            Logger.LogDebug("{dlName}: File {fileHash} already available at {existingPath}, skipping write", downloadName, fileHash, existingPath);
+            return;
         }
 
-        // Write decompressed file outside of the gate to not block other decompressions
         try
         {
-            await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, CancellationToken.None).ConfigureAwait(false);
+            // Gate decompression to prevent CPU exhaustion
+            // Decompression is completed fully before releasing the gate to ensure
+            // we don't lose decompressed data if file write fails
+            byte[] decompressedFile;
+            await _decompressGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                decompressedFile = LZ4Wrapper.Unwrap(compressedData);
+            }
+            finally
+            {
+                _decompressGate.Release();
+            }
+
+            // Write decompressed file outside of the gate to not block other decompressions
+            try
+            {
+                await _fileCompactor.WriteAllBytesAsync(filePath, decompressedFile, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception writeEx)
+            {
+                Logger.LogWarning(writeEx, "{dlName}: Failed to write decompressed file {fileHash} to {filePath}", downloadName, fileHash, filePath);
+                // Clean up partial file if it exists
+                try { File.Delete(filePath); } catch { /* ignore cleanup errors */ }
+                throw;
+            }
+
+            PersistFileToStorage(fileHash, filePath);
+
+            // Signal successful completion to any waiters
+            _fileDbManager.CompleteFileDownload(fileHash, filePath);
         }
-        catch (Exception writeEx)
+        catch (Exception ex)
         {
-            Logger.LogWarning(writeEx, "{dlName}: Failed to write decompressed file {fileHash} to {filePath}", downloadName, fileHash, filePath);
-            // Clean up partial file if it exists
-            try { File.Delete(filePath); } catch { /* ignore cleanup errors */ }
+            // Signal failure to any waiters
+            _fileDbManager.FailFileDownload(fileHash, ex);
             throw;
         }
-
-        PersistFileToStorage(fileHash, filePath);
     }
 
     private async Task DownloadFilesInternal(int serverIndex, GameObjectHandler gameObjectHandler, List<FileReplacementData> fileReplacement, CancellationToken ct)

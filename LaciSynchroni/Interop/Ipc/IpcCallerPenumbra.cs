@@ -234,9 +234,10 @@ public sealed class IpcCallerPenumbra : IpcCallerBase
     public async Task RedrawAsync(ILogger logger, GameObjectHandler handler, Guid applicationId, CancellationToken token)
     {
         if (!APIAvailable || DalamudUtil.IsZoning) return;
+
+        await _redrawManager.RedrawSemaphore.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            await _redrawManager.RedrawSemaphore.WaitAsync(token).ConfigureAwait(false);
             await _redrawManager.PenumbraRedrawInternalAsync(logger, handler, applicationId, (chara) =>
             {
                 logger.LogDebug("[{Appid}] Calling on IPC: PenumbraRedraw", applicationId);
