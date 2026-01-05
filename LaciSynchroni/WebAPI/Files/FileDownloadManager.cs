@@ -510,7 +510,12 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         },
         async (fileGroup, token) =>
         {
-            // let server predownload files
+            // Acquire download slot BEFORE telling server to prepare files.
+            // This prevents the server from timing out prepared downloads while we wait for a slot.
+            SetDownloadStatus(fileGroup.Key, DownloadStatus.WaitingForSlot);
+            await using var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
+
+            // Now tell server to prepare files
             var requestIdResponse = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Post, FilesRoutes.RequestEnqueueFullPath(fileGroup.First().DownloadUri),
                 fileGroup.Select(c => c.Hash), token).ConfigureAwait(false);
             Logger.LogDebug("Sent request for {n} files on server {uri} with result {result}", fileGroup.Count(), fileGroup.First().DownloadUri,
@@ -522,10 +527,6 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
             var blockFile = _fileDbManager.GetCacheFilePath(requestId.ToString("N"), "blk");
             FileInfo fi = new(blockFile);
-
-            // Use slot lease pattern to ensure slot is always released
-            SetDownloadStatus(fileGroup.Key, DownloadStatus.WaitingForSlot);
-            await using var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
 
             try
             {

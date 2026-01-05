@@ -87,7 +87,8 @@ public sealed class FileCompactor
             return;
         }
 
-        CompactFile(filePath);
+        // Run compression on thread pool to avoid blocking the download pipeline
+        await Task.Run(() => CompactFile(filePath), CancellationToken.None).ConfigureAwait(false);
     }
 
     [DllImport("kernel32.dll")]
