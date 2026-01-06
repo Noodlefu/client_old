@@ -1,22 +1,20 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace LaciSynchroni.Utils;
 
 public static class Crypto
 {
-#pragma warning disable SYSLIB0021 // Type or member is obsolete
-
     private static readonly Dictionary<(string, ushort), string> _hashListPlayersSHA256 = new();
     private static readonly Dictionary<string, string> _hashListSHA256 = new(StringComparer.Ordinal);
-    private static readonly SHA256CryptoServiceProvider _sha256CryptoProvider = new();
 
     public static string GetFileHash(this string filePath)
     {
-        using SHA1CryptoServiceProvider cryptoProvider = new();
-        // Use FileShare.ReadWrite to allow reading files that may be open for writing by other processes
-        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        return BitConverter.ToString(cryptoProvider.ComputeHash(fs)).Replace("-", "", StringComparison.Ordinal);
+        // Use FileShare.Read to allow other readers but fail if a writer has the file open
+        // This prevents computing a hash on a partially-written file
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var hashBytes = SHA1.HashData(fs);
+        return BitConverter.ToString(hashBytes).Replace("-", "", StringComparison.Ordinal);
     }
 
     public static string GetHash256(this (string, ushort) playerToHash)
@@ -24,8 +22,9 @@ public static class Crypto
         if (_hashListPlayersSHA256.TryGetValue(playerToHash, out var hash))
             return hash;
 
+        var inputBytes = Encoding.UTF8.GetBytes(playerToHash.Item1 + playerToHash.Item2.ToString());
         return _hashListPlayersSHA256[playerToHash] =
-            BitConverter.ToString(_sha256CryptoProvider.ComputeHash(Encoding.UTF8.GetBytes(playerToHash.Item1 + playerToHash.Item2.ToString()))).Replace("-", "", StringComparison.Ordinal);
+            BitConverter.ToString(SHA256.HashData(inputBytes)).Replace("-", "", StringComparison.Ordinal);
     }
 
     public static string GetHash256(this string stringToHash)
@@ -38,8 +37,8 @@ public static class Crypto
         if (_hashListSHA256.TryGetValue(stringToCompute, out var hash))
             return hash;
 
+        var inputBytes = Encoding.UTF8.GetBytes(stringToCompute);
         return _hashListSHA256[stringToCompute] =
-            BitConverter.ToString(_sha256CryptoProvider.ComputeHash(Encoding.UTF8.GetBytes(stringToCompute))).Replace("-", "", StringComparison.Ordinal);
+            BitConverter.ToString(SHA256.HashData(inputBytes)).Replace("-", "", StringComparison.Ordinal);
     }
-#pragma warning restore SYSLIB0021 // Type or member is obsolete
 }

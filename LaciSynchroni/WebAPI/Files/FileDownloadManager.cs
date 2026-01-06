@@ -19,6 +19,8 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 {
     private const int MaxRetryAttempts = 3;
     private static readonly TimeSpan[] RetryDelays = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)];
+    /// <summary>Timeout for read operations - if no data received within this time, the download is considered stalled.</summary>
+    private static readonly TimeSpan ReadActivityTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>XOR key used for data munging/obfuscation.</summary>
     private const byte MungeXorKey = 42;
@@ -292,9 +294,24 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 {
                     _activeDownloadStreams.Add(stream);
                 }
-                while ((bytesRead = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                using var timeoutCts = new CancellationTokenSource(ReadActivityTimeout);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+                while (true)
                 {
-                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        bytesRead = await stream.ReadAsync(buffer, linkedCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        throw new IOException($"Download stalled - no data received for {ReadActivityTimeout.TotalSeconds} seconds");
+                    }
+
+                    if (bytesRead == 0) break;
+
+                    // Reset timeout for next read
+                    timeoutCts.TryReset();
+                    timeoutCts.CancelAfter(ReadActivityTimeout);
 
                     MungeBuffer(buffer.AsSpan(0, bytesRead));
 
@@ -505,7 +522,9 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
         await Parallel.ForEachAsync(downloadGroups, new ParallelOptions()
         {
-            MaxDegreeOfParallelism = Math.Min(downloadGroups.Count(), _orchestrator.AvailableDownloadSlots),
+            // Don't limit parallelism here - let the semaphore in AcquireDownloadSlotAsync control it.
+            // This allows all groups to reach "WaitingForSlot" state and be ready to start immediately
+            // when a slot becomes available, rather than waiting for Parallel.ForEachAsync to schedule them.
             CancellationToken = ct,
         },
         async (fileGroup, token) =>
@@ -595,7 +614,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         // Start downloading each of the direct downloads
         var directDownloadsTask = directDownloads.Count == 0 ? Task.CompletedTask : Parallel.ForEachAsync(directDownloads, new ParallelOptions()
         {
-            MaxDegreeOfParallelism = Math.Min(directDownloads.Count, _orchestrator.AvailableDownloadSlots),
+            // Don't limit parallelism here - let the semaphore in AcquireDownloadSlotAsync control it.
             CancellationToken = ct,
         },
         async (directDownload, token) =>
@@ -820,9 +839,25 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     _activeDownloadStreams.Add(stream);
                 }
 
-                while ((bytesRead = await stream.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                using var timeoutCts = new CancellationTokenSource(ReadActivityTimeout);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+                while (true)
                 {
-                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        bytesRead = await stream.ReadAsync(buffer, linkedCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        throw new IOException($"Download stalled - no data received for {ReadActivityTimeout.TotalSeconds} seconds");
+                    }
+
+                    if (bytesRead == 0) break;
+
+                    // Reset timeout for next read
+                    timeoutCts.TryReset();
+                    timeoutCts.CancelAfter(ReadActivityTimeout);
+
                     await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct).ConfigureAwait(false);
 
                     progress.Report(bytesRead);

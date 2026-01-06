@@ -9,7 +9,6 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Threading;
 
 namespace LaciSynchroni.WebAPI.Files;
 

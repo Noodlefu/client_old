@@ -180,7 +180,16 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         Logger.LogDebug("[BASE-{appbase}] Applying data for {player}, forceApplyCustomization: {forced}, forceApplyMods: {forceMods}", applicationBase, this, forceApplyCustomization, _forceApplyMods);
         Logger.LogDebug("[BASE-{appbase}] Hash for data is {newHash}, current cache hash is {oldHash}", applicationBase, characterData.DataHash.Value, _cachedData?.DataHash.Value ?? "NODATA");
 
-        if (string.Equals(characterData.DataHash.Value, _cachedData?.DataHash.Value ?? string.Empty, StringComparison.Ordinal) && !forceApplyCustomization) return;
+        if (string.Equals(characterData.DataHash.Value, _cachedData?.DataHash.Value ?? string.Empty, StringComparison.Ordinal) && !forceApplyCustomization)
+        {
+            // Even if the data hash matches, check if any required files are missing from cache
+            // This handles the case where storage was cleared but character data is still cached in memory
+            if (!AnyRequiredFilesMissing(characterData))
+            {
+                return;
+            }
+            Logger.LogInformation("[BASE-{appbase}] Data hash matches but some files are missing from cache, proceeding with download", applicationBase);
+        }
 
         if (_dalamudUtil.IsInCutscene || _dalamudUtil.IsInGpose || !_ipcManager.Penumbra.APIAvailable || !_ipcManager.Glamourer.APIAvailable)
         {
@@ -719,6 +728,28 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                 await _ipcManager.Penumbra.RedrawAsync(Logger, tempHandler, applicationId, cancelToken).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// Checks if any files required by the character data are missing from the local cache.
+    /// This is a quick check that returns early on the first missing file.
+    /// </summary>
+    private bool AnyRequiredFilesMissing(CharacterData charaData)
+    {
+        var fileHashes = charaData.FileReplacements
+            .SelectMany(k => k.Value.Where(v => string.IsNullOrEmpty(v.FileSwapPath)))
+            .Select(v => v.Hash)
+            .Distinct(StringComparer.Ordinal);
+
+        foreach (var hash in fileHashes)
+        {
+            if (_fileDbManager.GetFileCacheByHash(hash) == null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private List<FileReplacementData> TryCalculateModdedDictionary(Guid applicationBase, CharacterData charaData, out Dictionary<(string GamePath, string? Hash), string> moddedDictionary, CancellationToken token)

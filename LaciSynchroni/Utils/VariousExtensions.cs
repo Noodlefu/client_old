@@ -1,6 +1,6 @@
 using Dalamud.Game.ClientState.Objects.Types;
-using Dalamud.Plugin;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
+using LaciSynchroni.Common.Data;
 using LaciSynchroni.PlayerData.Data;
 using LaciSynchroni.PlayerData.Handlers;
 using LaciSynchroni.PlayerData.Pairs;
@@ -13,6 +13,11 @@ namespace LaciSynchroni.Utils;
 
 public static class VariousExtensions
 {
+    /// <summary>
+    /// Path segments that require a forced redraw when changed.
+    /// </summary>
+    private static readonly string[] RedrawRequiredPaths = ["/face/", "/hair/", "/tail/", "/body/"];
+
     public static string ToByteString(this int bytes, bool addSuffix = true)
     {
         string[] suffix = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -103,38 +108,9 @@ public static class VariousExtensions
                         {
                             charaDataToUpdate[objectKind].Add(PlayerChanges.ForcedRedraw);
                         }
-                        else
+                        else if (RequiresRedraw(existingFileReplacements!, newFileReplacements!, logger, applicationBase))
                         {
-                            var existingFace = existingFileReplacements!.Where(g => g.GamePaths.Any(p => p.Contains("/face/", StringComparison.OrdinalIgnoreCase)))
-                                .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase).ToList();
-                            var existingHair = existingFileReplacements!.Where(g => g.GamePaths.Any(p => p.Contains("/hair/", StringComparison.OrdinalIgnoreCase)))
-                                .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase).ToList();
-                            var existingTail = existingFileReplacements!.Where(g => g.GamePaths.Any(p => p.Contains("/tail/", StringComparison.OrdinalIgnoreCase)))
-                                .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase).ToList();
-                            var newFace = newFileReplacements!.Where(g => g.GamePaths.Any(p => p.Contains("/face/", StringComparison.OrdinalIgnoreCase)))
-                                .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase).ToList();
-                            var newHair = newFileReplacements!.Where(g => g.GamePaths.Any(p => p.Contains("/hair/", StringComparison.OrdinalIgnoreCase)))
-                                .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase).ToList();
-                            var newTail = newFileReplacements!.Where(g => g.GamePaths.Any(p => p.Contains("/tail/", StringComparison.OrdinalIgnoreCase)))
-                                .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase).ToList();
-                            var existingTransients = existingFileReplacements!.Where(g => g.GamePaths.Any(g => !g.EndsWith("mdl") && !g.EndsWith("tex") && !g.EndsWith("mtrl")))
-                                .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase).ToList();
-                            var newTransients = newFileReplacements!.Where(g => g.GamePaths.Any(g => !g.EndsWith("mdl") && !g.EndsWith("tex") && !g.EndsWith("mtrl")))
-                                .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase).ToList();
-
-                            logger.LogTrace("[BASE-{appbase}] ExistingFace: {of}, NewFace: {fc}; ExistingHair: {eh}, NewHair: {nh}; ExistingTail: {et}, NewTail: {nt}; ExistingTransient: {etr}, NewTransient: {ntr}", applicationBase,
-                                existingFace.Count, newFace.Count, existingHair.Count, newHair.Count, existingTail.Count, newTail.Count, existingTransients.Count, newTransients.Count);
-
-                            var differentFace = !existingFace.SequenceEqual(newFace, FileReplacementDataComparer.Instance);
-                            var differentHair = !existingHair.SequenceEqual(newHair, FileReplacementDataComparer.Instance);
-                            var differentTail = !existingTail.SequenceEqual(newTail, FileReplacementDataComparer.Instance);
-                            var differenTransients = !existingTransients.SequenceEqual(newTransients, FileReplacementDataComparer.Instance);
-                            if (differentFace || differentHair || differentTail || differenTransients)
-                            {
-                                logger.LogDebug("[BASE-{appbase}] Different Subparts: Face: {face}, Hair: {hair}, Tail: {tail}, Transients: {transients} => {change}", applicationBase,
-                                    differentFace, differentHair, differentTail, differenTransients, PlayerChanges.ForcedRedraw);
-                                charaDataToUpdate[objectKind].Add(PlayerChanges.ForcedRedraw);
-                            }
+                            charaDataToUpdate[objectKind].Add(PlayerChanges.ForcedRedraw);
                         }
                     }
                 }
@@ -224,5 +200,70 @@ public static class VariousExtensions
         }
 
         return ((GameObject*)gameObject.Address)->ObjectIndex;
+    }
+
+    /// <summary>
+    /// Determines if file replacement changes require a forced redraw.
+    /// Checks for changes in face, hair, tail, body paths and transient (non-model/texture/material) files.
+    /// </summary>
+    private static bool RequiresRedraw(
+        List<FileReplacementData> existingReplacements,
+        List<FileReplacementData> newReplacements,
+        ILogger logger,
+        Guid applicationBase)
+    {
+        // Check each path type that requires redraw
+        var changedPaths = new List<string>();
+        foreach (var pathSegment in RedrawRequiredPaths)
+        {
+            var existing = GetReplacementsForPath(existingReplacements, pathSegment);
+            var updated = GetReplacementsForPath(newReplacements, pathSegment);
+
+            if (!existing.SequenceEqual(updated, FileReplacementDataComparer.Instance))
+            {
+                changedPaths.Add(pathSegment.Trim('/'));
+            }
+        }
+
+        // Check transients (non mdl/tex/mtrl files)
+        var existingTransients = GetTransientReplacements(existingReplacements);
+        var newTransients = GetTransientReplacements(newReplacements);
+        var transientsDifferent = !existingTransients.SequenceEqual(newTransients, FileReplacementDataComparer.Instance);
+
+        if (transientsDifferent)
+        {
+            changedPaths.Add("transients");
+        }
+
+        if (changedPaths.Count > 0)
+        {
+            logger.LogDebug("[BASE-{appbase}] Different subparts requiring redraw: {paths} => {change}",
+                applicationBase, string.Join(", ", changedPaths), PlayerChanges.ForcedRedraw);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Gets file replacements that contain the specified path segment, ordered by hash/swap path.
+    /// </summary>
+    private static List<FileReplacementData> GetReplacementsForPath(List<FileReplacementData> replacements, string pathSegment)
+    {
+        return replacements
+            .Where(g => g.GamePaths.Any(p => p.Contains(pathSegment, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Gets transient file replacements (files that are not .mdl, .tex, or .mtrl).
+    /// </summary>
+    private static List<FileReplacementData> GetTransientReplacements(List<FileReplacementData> replacements)
+    {
+        return replacements
+            .Where(g => g.GamePaths.Any(p => !p.EndsWith("mdl") && !p.EndsWith("tex") && !p.EndsWith("mtrl")))
+            .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 }
