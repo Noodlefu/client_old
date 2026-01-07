@@ -15,6 +15,7 @@ public abstract class IpcCallerBase : DisposableMediatorSubscriberBase
     protected readonly IDalamudPluginInterface PluginInterface;
     protected readonly DalamudUtilService DalamudUtil;
     private bool _shownUnavailableWarning;
+    private int _failedCheckCount;
 
     /// <summary>
     /// Gets whether the target plugin's API is available and ready.
@@ -48,6 +49,13 @@ public abstract class IpcCallerBase : DisposableMediatorSubscriberBase
     /// </summary>
     protected virtual bool UsePluginListVersionCheck => false;
 
+    /// <summary>
+    /// Gets the number of failed checks before showing the unavailable notification.
+    /// This allows time for other plugins to initialize their IPC endpoints.
+    /// Default is 3 (roughly 3 seconds with DelayedFrameworkUpdate).
+    /// </summary>
+    protected virtual int FailedChecksBeforeNotification => 3;
+
     protected IpcCallerBase(
         ILogger logger,
         IDalamudPluginInterface pluginInterface,
@@ -57,8 +65,12 @@ public abstract class IpcCallerBase : DisposableMediatorSubscriberBase
         PluginInterface = pluginInterface;
         DalamudUtil = dalamudUtil;
 
-        // Reset warning on login so user sees it again if still unavailable
-        Mediator.Subscribe<DalamudLoginMessage>(this, _ => _shownUnavailableWarning = false);
+        // Reset warning and check count on login so user sees it again if still unavailable
+        Mediator.Subscribe<DalamudLoginMessage>(this, _ =>
+        {
+            _shownUnavailableWarning = false;
+            _failedCheckCount = 0;
+        });
     }
 
     /// <summary>
@@ -79,6 +91,15 @@ public abstract class IpcCallerBase : DisposableMediatorSubscriberBase
                 available = CheckApiViaIpc();
             }
 
+            if (available)
+            {
+                _failedCheckCount = 0;
+            }
+            else
+            {
+                _failedCheckCount++;
+            }
+
             _shownUnavailableWarning = _shownUnavailableWarning && !available;
             APIAvailable = available;
         }
@@ -86,10 +107,12 @@ public abstract class IpcCallerBase : DisposableMediatorSubscriberBase
         {
             Logger.LogWarning(ex, "Error checking {PluginName} API availability", TargetPluginName);
             APIAvailable = false;
+            _failedCheckCount++;
         }
         finally
         {
-            if (!available && !_shownUnavailableWarning && ShowUnavailableNotification)
+            if (!available && !_shownUnavailableWarning && ShowUnavailableNotification
+                && _failedCheckCount >= FailedChecksBeforeNotification)
             {
                 _shownUnavailableWarning = true;
                 PublishUnavailableNotification();

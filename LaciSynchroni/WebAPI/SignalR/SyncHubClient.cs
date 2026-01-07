@@ -127,9 +127,6 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
             return;
         }
 
-        // Just make sure no open connection exists. It shouldn't, but can't hurt (At least I assume that was the intent...)
-        // Also set to "Connecting" at this point
-        await StopConnectionAsync(ServerState.Connecting).ConfigureAwait(false);
         Logger.LogInformation("Recreating Connection");
         Mediator.Publish(new EventMessage(new Event(nameof(ApiController), EventSeverity.Informational,
             $"Starting Connection to {ServerToUse.ServerName}")));
@@ -149,7 +146,6 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
         while (_serverState is not ServerState.Connected && !cancelReconnectToken.IsCancellationRequested)
         {
             AuthFailureMessage = string.Empty;
-            await StopConnectionAsync(ServerState.Disconnected).ConfigureAwait(false);
             _serverState = ServerState.Connecting;
 
             try
