@@ -1,4 +1,4 @@
-﻿using Dalamud.Bindings.ImGui;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Colors;
 using LaciSynchroni.PlayerData.Handlers;
 using LaciSynchroni.Services;
@@ -19,7 +19,8 @@ public class DownloadUi : WindowMediatorSubscriberBase
     private readonly DalamudUtilService _dalamudUtilService;
     private readonly FileUploadManager _fileTransferManager;
     private readonly UiSharedService _uiShared;
-    private readonly ConcurrentDictionary<GameObjectHandler, bool> _uploadingPlayers = new();
+    private readonly ConcurrentDictionary<GameObjectHandler, DateTime> _uploadingPlayers = new();
+    private static readonly TimeSpan UploadingTimeout = TimeSpan.FromSeconds(30);
 
     public DownloadUi(ILogger<DownloadUi> logger, DalamudUtilService dalamudUtilService, SyncConfigService configService,
         FileUploadManager fileTransferManager, SyncMediator mediator, UiSharedService uiShared, PerformanceCollectorService performanceCollectorService)
@@ -60,7 +61,7 @@ public class DownloadUi : WindowMediatorSubscriberBase
         {
             if (msg.IsUploading)
             {
-                _uploadingPlayers[msg.Handler] = true;
+                _uploadingPlayers[msg.Handler] = DateTime.UtcNow;
             }
             else
             {
@@ -183,6 +184,16 @@ public class DownloadUi : WindowMediatorSubscriberBase
 
             if (_configService.Current.ShowUploading)
             {
+                // Remove timed-out uploading players
+                var now = DateTime.UtcNow;
+                foreach (var kvp in _uploadingPlayers.ToList())
+                {
+                    if (now - kvp.Value > UploadingTimeout)
+                    {
+                        _uploadingPlayers.TryRemove(kvp.Key, out _);
+                    }
+                }
+
                 foreach (var player in _uploadingPlayers.Select(p => p.Key).ToList())
                 {
                     var screenPos = _dalamudUtilService.WorldToScreen(player.GetGameObject());
