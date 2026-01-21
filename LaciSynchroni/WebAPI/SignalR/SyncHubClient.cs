@@ -483,14 +483,32 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
     {
         while (!ct.IsCancellationRequested && _connection != null)
         {
-            await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
             Logger.LogDebug("Checking Client Health State");
 
             bool requireReconnect = await RefreshTokenAsync(ct).ConfigureAwait(false);
 
             if (requireReconnect) break;
 
-            _ = await CheckClientHealth().ConfigureAwait(false);
+            try
+            {
+                _ = await CheckClientHealth().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Connection closed... Reconnecting");
+                _doNotNotifyOnNextInfo = true;
+                _ = CreateConnectionsAsync();
+                break;
+            }
         }
     }
 
