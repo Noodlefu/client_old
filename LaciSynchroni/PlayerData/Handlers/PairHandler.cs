@@ -202,13 +202,18 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         var renderLockServerIndex = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
         if (renderLockServerIndex != Pair.ServerIndex && renderLockServerIndex > -1)
         {
+            var currentPriority = _serverConfigManager.GetServerPriorityByIndex(Pair.ServerIndex);
+            var lockOwnerServer = _serverConfigManager.GetServerByIndex(renderLockServerIndex);
+            var lockOwnerPriority = lockOwnerServer.Priority ?? 0;
             Logger.LogInformation(
-                "Cannot apply character data to {Player} from server {NewServerIndex} ({NewServerName}): server {ExistingServerIndex} ({ExistingServerName}) already syncs this target",
+                "Cannot apply character data to {Player} from server {NewServerIndex} ({NewServerName}, priority {NewPriority}): server {ExistingServerIndex} ({ExistingServerName}, priority {ExistingPriority}) already syncs this target",
                 PlayerName,
                 Pair.ServerIndex,
                 _serverInfo.ServerName,
+                currentPriority,
                 renderLockServerIndex,
-                _serverConfigManager.GetServerByIndex(renderLockServerIndex).ServerName);
+                lockOwnerServer.ServerName,
+                lockOwnerPriority);
             return;
         }
 
@@ -505,9 +510,18 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         if (downloadToken.IsCancellationRequested) return;
 
         _applicationCancellationTokenSource = _applicationCancellationTokenSource.CancelRecreate() ?? new CancellationTokenSource();
-        var token = _applicationCancellationTokenSource.Token;
+        // For now: Check if we still have priority after downloading. If not, end here, since a server with priority has taken over rendering that actor.
+        // Later: Pass cancellation token source to the lock, trigger cancel of everything when the lock gets taken away.
+        if (_concurrentPairLockService.HasRenderLock(PlayerNameHash, Pair.ServerIndex))
+        {
+            var token = _applicationCancellationTokenSource.Token;
+            _applicationTask = ApplyCharacterDataAsync(applicationBase, charaData, updatedData, updateModdedPaths, updateManip, moddedPaths, token);
+        }
+        else
+        {
+            _applicationTask = Task.CompletedTask;
+        }
 
-        _applicationTask = ApplyCharacterDataAsync(applicationBase, charaData, updatedData, updateModdedPaths, updateManip, moddedPaths, token);
     }
 
     private async Task ApplyCharacterDataAsync(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData, bool updateModdedPaths, bool updateManip,

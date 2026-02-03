@@ -45,24 +45,27 @@ public sealed class CharaDataFileHandler : IDisposable
     public void ComputeMissingFiles(CharaDataDownloadDto charaDataDownloadDto, out Dictionary<string, string> modPaths, out List<FileReplacementData> missingFiles)
     {
         modPaths = [];
-        missingFiles = [];
+        // Use Dictionary for O(1) lookup instead of List.Find() which is O(n)
+        var missingFilesByHash = new Dictionary<string, FileReplacementData>(StringComparer.Ordinal);
+
         foreach (var file in charaDataDownloadDto.FileGamePaths)
         {
             var localCacheFile = _fileCacheManager.GetFileCacheByHash(file.HashOrFileSwap);
             if (localCacheFile == null)
             {
-                var existingFile = missingFiles.Find(f => string.Equals(f.Hash, file.HashOrFileSwap, StringComparison.Ordinal));
-                if (existingFile == null)
+                if (missingFilesByHash.TryGetValue(file.HashOrFileSwap, out var existingFile))
                 {
-                    missingFiles.Add(new FileReplacementData()
-                    {
-                        Hash = file.HashOrFileSwap,
-                        GamePaths = [file.GamePath]
-                    });
+                    // Use List internally to avoid repeated array allocations
+                    existingFile.GamePathsList.Add(file.GamePath);
                 }
                 else
                 {
-                    existingFile.GamePaths = existingFile.GamePaths.Concat([file.GamePath]).ToArray();
+                    var newFile = new FileReplacementData()
+                    {
+                        Hash = file.HashOrFileSwap,
+                    };
+                    newFile.GamePathsList.Add(file.GamePath);
+                    missingFilesByHash[file.HashOrFileSwap] = newFile;
                 }
             }
             else
@@ -70,6 +73,9 @@ public sealed class CharaDataFileHandler : IDisposable
                 modPaths[file.GamePath] = localCacheFile.ResolvedFilepath;
             }
         }
+
+        // Convert dictionary values to list (GamePaths array is populated lazily from GamePathsList)
+        missingFiles = [.. missingFilesByHash.Values];
 
         foreach (var swap in charaDataDownloadDto.FileSwaps)
         {

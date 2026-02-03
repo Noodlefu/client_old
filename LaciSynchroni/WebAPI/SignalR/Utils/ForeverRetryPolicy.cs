@@ -6,36 +6,53 @@ namespace LaciSynchroni.WebAPI.SignalR.Utils;
 
 public class ForeverRetryPolicy : IRetryPolicy
 {
+    private static readonly Random _sharedRandom = new();
     private readonly SyncMediator _mediator;
     private readonly int _serverIndex;
+    private readonly string _serverName;
     private bool _sentDisconnected = false;
 
-    public ForeverRetryPolicy(SyncMediator mediator, int serverIndex)
+    public ForeverRetryPolicy(SyncMediator mediator, int serverIndex, string serverName)
     {
         _mediator = mediator;
         _serverIndex = serverIndex;
+        _serverName = serverName;
     }
 
     public TimeSpan? NextRetryDelay(RetryContext retryContext)
     {
-        TimeSpan timeToWait = TimeSpan.FromSeconds(new Random().Next(10, 20));
+        // Use shared Random instance with jitter for better reconnection behavior
+        int jitterMs;
+        lock (_sharedRandom)
+        {
+            jitterMs = _sharedRandom.Next(0, 5000); // 0-5 seconds jitter
+        }
+
+        TimeSpan baseDelay;
         if (retryContext.PreviousRetryCount == 0)
         {
             _sentDisconnected = false;
-            timeToWait = TimeSpan.FromSeconds(3);
+            baseDelay = TimeSpan.FromSeconds(3);
         }
-        else if (retryContext.PreviousRetryCount == 1) timeToWait = TimeSpan.FromSeconds(5);
-        else if (retryContext.PreviousRetryCount == 2) timeToWait = TimeSpan.FromSeconds(10);
+        else if (retryContext.PreviousRetryCount == 1)
+        {
+            baseDelay = TimeSpan.FromSeconds(5);
+        }
+        else if (retryContext.PreviousRetryCount == 2)
+        {
+            baseDelay = TimeSpan.FromSeconds(10);
+        }
         else
         {
             if (!_sentDisconnected)
             {
-                _mediator.Publish(new NotificationMessage("Connection lost", "Connection lost to server", NotificationType.Warning, TimeSpan.FromSeconds(10)));
+                _mediator.Publish(new NotificationMessage("Connection lost", $"Connection lost to service {_serverName}", NotificationType.Warning, TimeSpan.FromSeconds(10)));
                 _mediator.Publish(new DisconnectedMessage(_serverIndex));
             }
             _sentDisconnected = true;
+            baseDelay = TimeSpan.FromSeconds(15); // Base delay for subsequent retries
         }
 
-        return timeToWait;
+        return baseDelay + TimeSpan.FromMilliseconds(jitterMs);
     }
 }

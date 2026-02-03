@@ -51,6 +51,11 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
         {
             _previouslyVisiblePlayers.RemoveAll(key => key.ServerIndex == msg.ServerIndex);
         });
+        // When a pair comes online (e.g. reconnects), clear them from the cache so we push data to them again
+        Mediator.Subscribe<PairWentOnlineMessage>(this, (msg) =>
+        {
+            _previouslyVisiblePlayers.RemoveAll(key => key.UserData.UID == msg.UserKey.UserData.UID && key.ServerIndex == msg.UserKey.ServerIndex);
+        });
     }
 
     protected override void Dispose(bool disposing)

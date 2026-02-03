@@ -498,6 +498,8 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
         Dictionary<string, string[]> penumbraFiles = new(StringComparer.Ordinal);
         foreach (var folder in Directory.EnumerateDirectories(penumbraDir!))
         {
+            if (ct.IsCancellationRequested) return;
+
             try
             {
                 penumbraFiles[folder] =
@@ -514,8 +516,9 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
             {
                 Logger.LogWarning(ex, "Could not enumerate path {path}", folder);
             }
-            Thread.Sleep(50);
-            if (ct.IsCancellationRequested) return;
+
+            // Yield to other threads periodically without blocking
+            Thread.Yield();
         }
 
         var allCacheFiles = Directory.GetFiles(_configService.Current.CacheFolder, "*.*", SearchOption.TopDirectoryOnly)
@@ -535,8 +538,6 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
 
         TotalFiles = allScannedFiles.Count;
         Thread.CurrentThread.Priority = previousThreadPriority;
-
-        Thread.Sleep(TimeSpan.FromSeconds(2));
 
         if (ct.IsCancellationRequested) return;
 

@@ -16,7 +16,7 @@ public abstract class DrawFolderBase : IDrawFolder
     public int OnlinePairs => DrawPairs.Count(u => u.Pair.IsOnline);
     public int TotalPairs => _allPairs.Count;
     private bool _wasHovered = false;
-    
+
     protected DrawFolderBase(IImmutableList<DrawUserPair> drawPairs, IImmutableList<Pair> allPairs, UiSharedService uiSharedService)
     {
         DrawPairs = drawPairs;
@@ -26,7 +26,7 @@ public abstract class DrawFolderBase : IDrawFolder
 
     protected abstract bool RenderIfEmpty { get; }
     protected abstract bool RenderMenu { get; }
-    protected abstract string ComponentId { get;  }
+    protected abstract string ComponentId { get; }
 
     public void Draw()
     {
@@ -88,10 +88,18 @@ public abstract class DrawFolderBase : IDrawFolder
     {
         if (DrawPairs.Any())
         {
-            foreach (var item in DrawPairs)
+            // Use list clipper for virtualization - only draw visible items
+            var clipper = ImGui.ImGuiListClipper();
+            clipper.Begin(DrawPairs.Count, ImGui.GetFrameHeight());
+            while (clipper.Step())
             {
-                item.DrawPairedClient();
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+                {
+                    DrawPairs[i].DrawPairedClient();
+                }
             }
+            clipper.End();
+            clipper.Destroy();
         }
         else
         {

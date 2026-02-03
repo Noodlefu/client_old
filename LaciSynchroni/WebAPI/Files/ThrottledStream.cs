@@ -158,7 +158,7 @@ namespace LaciSynchroni.WebAPI.Files
         private sealed class Bandwidth
         {
             private long _count;
-            private int _lastSecondCheckpoint;
+            private long _lastSecondCheckpoint;
             private long _lastTransferredBytesCount;
             private int _speedRetrieveTime;
             public double Speed { get; private set; }
@@ -173,7 +173,8 @@ namespace LaciSynchroni.WebAPI.Files
 
             public void CalculateSpeed(long receivedBytesCount)
             {
-                int elapsedTime = Environment.TickCount - _lastSecondCheckpoint + 1;
+                // Use TickCount64 to avoid wraparound issues (TickCount wraps every ~24 days)
+                long elapsedTime = Environment.TickCount64 - Interlocked.Read(ref _lastSecondCheckpoint) + 1;
                 receivedBytesCount = Interlocked.Add(ref _lastTransferredBytesCount, receivedBytesCount);
                 double momentSpeed = receivedBytesCount * 1000 / (double)elapsedTime; // B/s
 
@@ -188,7 +189,7 @@ namespace LaciSynchroni.WebAPI.Files
                 if (momentSpeed >= BandwidthLimit)
                 {
                     var expectedTime = receivedBytesCount * 1000 / BandwidthLimit;
-                    Interlocked.Add(ref _speedRetrieveTime, (int)expectedTime - elapsedTime);
+                    Interlocked.Add(ref _speedRetrieveTime, (int)(expectedTime - elapsedTime));
                 }
             }
 
@@ -207,7 +208,7 @@ namespace LaciSynchroni.WebAPI.Files
 
             private void SecondCheckpoint()
             {
-                Interlocked.Exchange(ref _lastSecondCheckpoint, Environment.TickCount);
+                Interlocked.Exchange(ref _lastSecondCheckpoint, Environment.TickCount64);
                 Interlocked.Exchange(ref _lastTransferredBytesCount, 0);
             }
         }

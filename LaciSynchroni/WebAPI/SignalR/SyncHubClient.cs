@@ -69,6 +69,28 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
 
     private ServerStorage ServerToUse => _serverConfigurationManager.GetServerByIndex(ServerIndex);
 
+    /// <summary>
+    /// Cached MessagePack serializer options - created once and reused across all connections.
+    /// </summary>
+    private static readonly MessagePackSerializerOptions _messagePackOptions = CreateMessagePackOptions();
+
+    private static MessagePackSerializerOptions CreateMessagePackOptions()
+    {
+        var resolver = CompositeResolver.Create(StandardResolverAllowPrivate.Instance,
+            BuiltinResolver.Instance,
+            AttributeFormatterResolver.Instance,
+            DynamicEnumAsStringResolver.Instance,
+            DynamicGenericResolver.Instance,
+            DynamicUnionResolver.Instance,
+            DynamicObjectResolver.Instance,
+            PrimitiveObjectResolver.Instance,
+            StandardResolver.Instance);
+
+        return MessagePackSerializerOptions.Standard
+            .WithCompression(MessagePackCompression.Lz4Block)
+            .WithResolver(resolver);
+    }
+
     public SyncHubClient(int serverIndex,
         ServerConfigurationManager serverConfigurationManager, PairManager pairManager,
         DalamudUtilService dalamudUtilService,
@@ -127,6 +149,9 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
             return;
         }
 
+        // Just make sure no open connection exists. It shouldn't, but can't hurt (At least I assume that was the intent...)
+        // Also set to "Connecting" at this point
+        await StopConnectionAsync(ServerState.Connecting).ConfigureAwait(false);
         Logger.LogInformation("Recreating Connection");
         Mediator.Publish(new EventMessage(new Event(nameof(ApiController), EventSeverity.Informational,
             $"Starting Connection to {ServerToUse.ServerName}")));
@@ -146,6 +171,7 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
         while (_serverState is not ServerState.Connected && !cancelReconnectToken.IsCancellationRequested)
         {
             AuthFailureMessage = string.Empty;
+            await StopConnectionAsync(ServerState.Disconnected).ConfigureAwait(false);
             _serverState = ServerState.Connecting;
 
             try
@@ -339,24 +365,10 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
             })
             .AddMessagePackProtocol(opt =>
             {
-                var resolver = CompositeResolver.Create(StandardResolverAllowPrivate.Instance,
-                    BuiltinResolver.Instance,
-                    AttributeFormatterResolver.Instance,
-                    // replace enum resolver
-                    DynamicEnumAsStringResolver.Instance,
-                    DynamicGenericResolver.Instance,
-                    DynamicUnionResolver.Instance,
-                    DynamicObjectResolver.Instance,
-                    PrimitiveObjectResolver.Instance,
-                    // final fallback(last priority)www
-                    StandardResolver.Instance);
-
-                opt.SerializerOptions =
-                    MessagePackSerializerOptions.Standard
-                        .WithCompression(MessagePackCompression.Lz4Block)
-                        .WithResolver(resolver);
+                // Use cached serializer options to avoid repeated allocations
+                opt.SerializerOptions = _messagePackOptions;
             })
-            .WithAutomaticReconnect(new ForeverRetryPolicy(Mediator, ServerIndex))
+            .WithAutomaticReconnect(new ForeverRetryPolicy(Mediator, ServerIndex, ServerToUse.ServerName))
             .ConfigureLogging(a =>
             {
                 a.ClearProviders().AddProvider(_loggerProvider);

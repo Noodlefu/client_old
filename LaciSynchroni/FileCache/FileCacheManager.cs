@@ -28,6 +28,13 @@ public sealed class FileCacheManager : IHostedService
     private readonly ILogger<FileCacheManager> _logger;
 
     /// <summary>
+    /// Cache for file validation results to avoid repeated FileInfo.Exists calls.
+    /// Key: resolved file path, Value: (validation result, expiration time)
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (bool Exists, long LastModifiedTicks, long ExpiresAt)> _validationCache = new(StringComparer.OrdinalIgnoreCase);
+    private const int ValidationCacheTtlMs = 5000; // 5 second TTL
+
+    /// <summary>
     /// Tracks pending file downloads by hash. When a download is in progress for a hash,
     /// other requesters will wait on the TaskCompletionSource instead of starting duplicate downloads.
     /// The value contains the TCS and a count of how many tasks are interested in this download.
@@ -70,22 +77,64 @@ public sealed class FileCacheManager : IHostedService
     public FileCacheEntity? CreateCacheEntry(string path)
     {
         FileInfo fi = new(path);
-        if (!fi.Exists) return null;
+        if (!fi.Exists)
+        {
+            _logger.LogWarning("CreateCacheEntry: File does not exist: {Path}", path);
+            return null;
+        }
         _logger.LogTrace("Creating cache entry for {Path}", path);
-        var fullName = fi.FullName.ToLowerInvariant();
-        if (!fullName.Contains(_configService.Current.CacheFolder.ToLowerInvariant(), StringComparison.Ordinal)) return null;
-        string prefixedPath = fullName.Replace(_configService.Current.CacheFolder.ToLowerInvariant(), CachePrefix + "\\", StringComparison.Ordinal).Replace("\\\\", "\\", StringComparison.Ordinal);
+
+        // Normalize paths to handle different formats (forward/back slashes, trailing slashes, case)
+        var fullName = NormalizePath(fi.FullName);
+        var cacheFolder = NormalizePath(_configService.Current.CacheFolder);
+
+        if (!fullName.StartsWith(cacheFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("CreateCacheEntry: Path {FullName} is not under cache folder {CacheFolder}", fullName, cacheFolder);
+            return null;
+        }
+
+        // Build prefixed path by replacing the cache folder with the prefix
+        var relativePath = fullName[cacheFolder.Length..].TrimStart('\\');
+        string prefixedPath = CachePrefix + "\\" + relativePath;
         return CreateFileCacheEntity(fi, prefixedPath);
+    }
+
+    /// <summary>
+    /// Normalizes a path for consistent comparison: converts to lowercase, uses backslashes, removes trailing slashes.
+    /// </summary>
+    private static string NormalizePath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        // Get the full path to resolve any relative components and normalize separators
+        var normalized = Path.GetFullPath(path).ToLowerInvariant();
+        // Ensure consistent trailing slash handling - remove trailing separator
+        return normalized.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     public FileCacheEntity? CreateFileEntry(string path)
     {
         FileInfo fi = new(path);
-        if (!fi.Exists) return null;
+        if (!fi.Exists)
+        {
+            _logger.LogWarning("CreateFileEntry: File does not exist: {Path}", path);
+            return null;
+        }
         _logger.LogTrace("Creating file entry for {Path}", path);
-        var fullName = fi.FullName.ToLowerInvariant();
-        if (!fullName.Contains(_ipcManager.Penumbra.ModDirectory!.ToLowerInvariant(), StringComparison.Ordinal)) return null;
-        string prefixedPath = fullName.Replace(_ipcManager.Penumbra.ModDirectory!.ToLowerInvariant(), PenumbraPrefix + "\\", StringComparison.Ordinal).Replace("\\\\", "\\", StringComparison.Ordinal);
+
+        // Normalize paths to handle different formats (forward/back slashes, trailing slashes, case)
+        var fullName = NormalizePath(fi.FullName);
+        var modDirectory = NormalizePath(_ipcManager.Penumbra.ModDirectory!);
+
+        if (!fullName.StartsWith(modDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("CreateFileEntry: Path {FullName} is not under mod directory {ModDirectory}", fullName, modDirectory);
+            return null;
+        }
+
+        // Build prefixed path by replacing the mod directory with the prefix
+        var relativePath = fullName[modDirectory.Length..].TrimStart('\\');
+        string prefixedPath = PenumbraPrefix + "\\" + relativePath;
         return CreateFileCacheEntity(fi, prefixedPath);
     }
 
@@ -123,7 +172,7 @@ public sealed class FileCacheManager : IHostedService
         return output;
     }
 
-    public Task<List<FileCacheEntity>> ValidateLocalIntegrity(IProgress<(int, int, FileCacheEntity)> progress, CancellationToken cancellationToken)
+    public async Task<List<FileCacheEntity>> ValidateLocalIntegrity(IProgress<(int, int, FileCacheEntity)> progress, CancellationToken cancellationToken)
     {
         _syncMediator.Publish(new HaltScanMessage(nameof(ValidateLocalIntegrity)));
         _logger.LogInformation("Validating local storage");
@@ -132,39 +181,63 @@ public sealed class FileCacheManager : IHostedService
         {
             cacheEntries = _fileCaches.SelectMany(v => v.Value).Where(v => v.IsCacheEntry).ToList();
         }
-        List<FileCacheEntity> brokenEntities = [];
-        int i = 0;
-        foreach (var fileCache in cacheEntries)
+
+        var brokenEntities = new ConcurrentBag<FileCacheEntity>();
+        var processedCount = 0;
+        var totalCount = cacheEntries.Count;
+
+        // Use parallel processing for hash validation (I/O and CPU bound)
+        var parallelOptions = new ParallelOptions
         {
-            if (cancellationToken.IsCancellationRequested) break;
+            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
+            CancellationToken = cancellationToken
+        };
 
-            _logger.LogInformation("Validating {File}", fileCache.ResolvedFilepath);
-
-            progress.Report((i, cacheEntries.Count, fileCache));
-            i++;
-            if (!File.Exists(fileCache.ResolvedFilepath))
+        try
+        {
+            await Parallel.ForEachAsync(cacheEntries, parallelOptions, async (fileCache, ct) =>
             {
-                brokenEntities.Add(fileCache);
-                continue;
-            }
+                var currentProgress = Interlocked.Increment(ref processedCount);
 
-            try
-            {
-                var computedHash = Crypto.GetFileHash(fileCache.ResolvedFilepath);
-                if (!string.Equals(computedHash, fileCache.Hash, StringComparison.Ordinal))
+                _logger.LogDebug("Validating {File} ({Current}/{Total})", fileCache.ResolvedFilepath, currentProgress, totalCount);
+                progress.Report((currentProgress, totalCount, fileCache));
+
+                if (!File.Exists(fileCache.ResolvedFilepath))
                 {
-                    _logger.LogInformation("Failed to validate {File}, got hash {ActualHash}, expected hash {ExpectedHash}", fileCache.ResolvedFilepath, computedHash, fileCache.Hash);
+                    brokenEntities.Add(fileCache);
+                    return;
+                }
+
+                try
+                {
+                    // Run hash computation on thread pool to avoid blocking
+                    var computedHash = await Task.Run(() => Crypto.GetFileHash(fileCache.ResolvedFilepath), ct).ConfigureAwait(false);
+                    if (!string.Equals(computedHash, fileCache.Hash, StringComparison.Ordinal))
+                    {
+                        _logger.LogInformation("Failed to validate {File}, got hash {ActualHash}, expected hash {ExpectedHash}",
+                            fileCache.ResolvedFilepath, computedHash, fileCache.Hash);
+                        brokenEntities.Add(fileCache);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Propagate cancellation
+                }
+                catch (Exception e)
+                {
+                    _logger.LogWarning(e, "Error during validation of {File}", fileCache.ResolvedFilepath);
                     brokenEntities.Add(fileCache);
                 }
-            }
-            catch (Exception e)
-            {
-                _logger.LogWarning(e, "Error during validation of {File}", fileCache.ResolvedFilepath);
-                brokenEntities.Add(fileCache);
-            }
+            }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Validation cancelled");
         }
 
-        foreach (var brokenEntity in brokenEntities)
+        var brokenList = brokenEntities.ToList();
+
+        foreach (var brokenEntity in brokenList)
         {
             RemoveHashedFile(brokenEntity.Hash, brokenEntity.PrefixedFilePath);
 
@@ -179,7 +252,7 @@ public sealed class FileCacheManager : IHostedService
         }
 
         _syncMediator.Publish(new ResumeScanMessage(nameof(ValidateLocalIntegrity)));
-        return Task.FromResult(brokenEntities);
+        return brokenList;
     }
 
     public string GetCacheFilePath(string hash, string extension)
@@ -442,6 +515,12 @@ public sealed class FileCacheManager : IHostedService
         {
             if (_fileCaches.TryGetValue(hash, out var caches))
             {
+                // Invalidate validation cache for removed files
+                foreach (var cache in caches?.Where(c => string.Equals(c.PrefixedFilePath, prefixedFilePath, StringComparison.Ordinal)) ?? [])
+                {
+                    InvalidateValidationCache(cache.ResolvedFilepath);
+                }
+
                 var removedCount = caches?.RemoveAll(c => string.Equals(c.PrefixedFilePath, prefixedFilePath, StringComparison.Ordinal));
                 _logger.LogTrace("Removed from DB: {count} file(s) with hash {hash} and file cache {path}", removedCount, hash, prefixedFilePath);
 
@@ -451,6 +530,14 @@ public sealed class FileCacheManager : IHostedService
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Invalidates the validation cache entry for a specific file path.
+    /// </summary>
+    private void InvalidateValidationCache(string resolvedFilePath)
+    {
+        _validationCache.TryRemove(resolvedFilePath, out _);
     }
 
     public void UpdateHashedFile(FileCacheEntity fileCache, bool computeProperties = true)
@@ -595,14 +682,41 @@ public sealed class FileCacheManager : IHostedService
 
     private FileCacheEntity? Validate(FileCacheEntity fileCache)
     {
-        var file = new FileInfo(fileCache.ResolvedFilepath);
-        if (!file.Exists)
+        var resolvedPath = fileCache.ResolvedFilepath;
+        var now = Environment.TickCount64;
+
+        // Check validation cache first
+        if (_validationCache.TryGetValue(resolvedPath, out var cached) && cached.ExpiresAt > now)
+        {
+            if (!cached.Exists)
+            {
+                RemoveHashedFile(fileCache.Hash, fileCache.PrefixedFilePath);
+                return null;
+            }
+
+            // Check if last modified time changed since we cached it
+            if (!string.Equals(cached.LastModifiedTicks.ToString(CultureInfo.InvariantCulture), fileCache.LastModifiedDateTicks, StringComparison.Ordinal))
+            {
+                UpdateHashedFile(fileCache);
+            }
+            return fileCache;
+        }
+
+        // Cache miss or expired - perform actual file check
+        var file = new FileInfo(resolvedPath);
+        var exists = file.Exists;
+        var lastModifiedTicks = exists ? file.LastWriteTimeUtc.Ticks : 0;
+
+        // Update cache
+        _validationCache[resolvedPath] = (exists, lastModifiedTicks, now + ValidationCacheTtlMs);
+
+        if (!exists)
         {
             RemoveHashedFile(fileCache.Hash, fileCache.PrefixedFilePath);
             return null;
         }
 
-        if (!string.Equals(file.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture), fileCache.LastModifiedDateTicks, StringComparison.Ordinal))
+        if (!string.Equals(lastModifiedTicks.ToString(CultureInfo.InvariantCulture), fileCache.LastModifiedDateTicks, StringComparison.Ordinal))
         {
             UpdateHashedFile(fileCache);
         }
@@ -665,7 +779,7 @@ public sealed class FileCacheManager : IHostedService
         }
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting FileCacheManager");
 
@@ -714,6 +828,7 @@ public sealed class FileCacheManager : IHostedService
             bool success = false;
             string[] entries = [];
             int attempts = 0;
+            int delayMs = 100;
             while (!success && attempts < 10)
             {
                 try
@@ -725,8 +840,9 @@ public sealed class FileCacheManager : IHostedService
                 catch (Exception ex)
                 {
                     attempts++;
-                    _logger.LogWarning(ex, "Could not open {File}, trying again", _csvPath);
-                    Thread.Sleep(100);
+                    _logger.LogWarning(ex, "Could not open {File}, trying again (attempt {Attempt}/10)", _csvPath, attempts);
+                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
+                    delayMs = Math.Min(delayMs * 2, 1000); // Exponential backoff up to 1 second
                 }
             }
 
@@ -784,8 +900,6 @@ public sealed class FileCacheManager : IHostedService
         }
 
         _logger.LogInformation("Started FileCacheManager");
-
-        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)

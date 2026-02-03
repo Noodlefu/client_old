@@ -47,13 +47,13 @@ public class ServerConfigurationManager
                 return null;
             }
 
-            return new ServerInfoDto { Id = index, Name = v.ServerName, Uri = v.ServerUri, HubUri = v.UseAdvancedUris ? v.ServerHubUri : string.Empty, Discord = v.DiscordInvite, FullPause = v.FullPause};
+            return new ServerInfoDto { Id = index, Name = v.ServerName, Uri = v.ServerUri, HubUri = v.UseAdvancedUris ? v.ServerHubUri : string.Empty, Discord = v.DiscordInvite, FullPause = v.FullPause };
         })
         .Where(dto => dto != null)!;
 
     public IEnumerable<int> ServerIndexes => ServerInfo.Select(s => s.Id);
     public bool AnyServerConfigured => _serverConfigService.Current.ServerStorage.Exists(server => !server.Deleted);
-    
+
     public bool SendCensusData
     {
         get
@@ -178,7 +178,12 @@ public class ServerConfigurationManager
     {
         return GetServerByIndex(index).ServerName;
     }
-    
+
+    public int GetServerPriorityByIndex(int index)
+    {
+        return GetServerByIndex(index).Priority ?? 0;
+    }
+
     public ServerStorage GetServerByIndex(int idx)
     {
         return _serverConfigService.Current.ServerStorage[idx];
@@ -256,13 +261,13 @@ public class ServerConfigurationManager
         GetTagStorageForIndex(serverIndex).OpenPairTags.Add(tag);
         _serverTagConfig.Save();
     }
-    
+
     internal void AddGlobalOpenPairTag(string tag)
     {
         _serverTagConfig.Current.GlobalTagStorage.OpenPairTags.Add(tag);
         _serverTagConfig.Save();
     }
-    
+
     internal void RemoveOpenGlobalPairTag(string tag)
     {
         _serverTagConfig.Current.GlobalTagStorage.OpenPairTags.Remove(tag);
@@ -274,7 +279,7 @@ public class ServerConfigurationManager
         _serverConfigService.Current.ServerStorage.Add(serverStorage);
         Save();
     }
-    
+
     internal void SetFirstServer(ServerStorage serverStorage)
     {
         _serverConfigService.Current.ServerStorage.Clear();
@@ -308,7 +313,7 @@ public class ServerConfigurationManager
     {
         return GetTagStorageForIndex(serverIndex).OpenPairTags.Contains(tag);
     }
-    
+
     internal bool ContainsGlobalOpenPairTag(string tag)
     {
         return _serverTagConfig.Current.GlobalTagStorage.OpenPairTags.Contains(tag);

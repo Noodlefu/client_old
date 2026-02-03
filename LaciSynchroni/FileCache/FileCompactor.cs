@@ -1,6 +1,7 @@
 using LaciSynchroni.Services;
 using LaciSynchroni.SyncConfiguration;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
 namespace LaciSynchroni.FileCache;
@@ -10,7 +11,7 @@ public sealed class FileCompactor
     public const uint FSCTL_DELETE_EXTERNAL_BACKING = 0x90314U;
     public const ulong WOF_PROVIDER_FILE = 2UL;
 
-    private readonly Dictionary<string, int> _clusterSizes;
+    private readonly ConcurrentDictionary<string, int> _clusterSizes;
 
     private readonly WOF_FILE_COMPRESSION_INFO_V1 _efInfo;
     private readonly ILogger<FileCompactor> _logger;
@@ -169,13 +170,16 @@ public sealed class FileCompactor
         if (!fi.Exists) return -1;
         var root = fi.Directory?.Root.FullName.ToLower() ?? string.Empty;
         if (string.IsNullOrEmpty(root)) return -1;
-        if (_clusterSizes.TryGetValue(root, out int value)) return value;
-        _logger.LogDebug("Getting Cluster Size for {path}, root {root}", fi.FullName, root);
-        int result = GetDiskFreeSpaceW(root, out uint sectorsPerCluster, out uint bytesPerSector, out _, out _);
-        if (result == 0) return -1;
-        _clusterSizes[root] = (int)(sectorsPerCluster * bytesPerSector);
-        _logger.LogDebug("Determined Cluster Size for root {root}: {cluster}", root, _clusterSizes[root]);
-        return _clusterSizes[root];
+
+        return _clusterSizes.GetOrAdd(root, rootPath =>
+        {
+            _logger.LogDebug("Getting Cluster Size for {path}, root {root}", fi.FullName, rootPath);
+            int result = GetDiskFreeSpaceW(rootPath, out uint sectorsPerCluster, out uint bytesPerSector, out _, out _);
+            if (result == 0) return -1;
+            var clusterSize = (int)(sectorsPerCluster * bytesPerSector);
+            _logger.LogDebug("Determined Cluster Size for root {root}: {cluster}", rootPath, clusterSize);
+            return clusterSize;
+        });
     }
 
     private static bool IsCompactedFile(string filePath)

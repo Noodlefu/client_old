@@ -442,15 +442,12 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
         {
             if (!_framework.IsInFrameworkUpdateThread)
             {
-                await _framework.RunOnFrameworkThread(act).ContinueWith((_) => Task.CompletedTask).ConfigureAwait(false);
-                while (_framework.IsInFrameworkUpdateThread) // yield the thread again, should technically never be triggered
-                {
-                    _logger.LogTrace("Still on framework");
-                    await Task.Delay(1).ConfigureAwait(false);
-                }
+                await _framework.RunOnFrameworkThread(act).ConfigureAwait(false);
             }
             else
+            {
                 act();
+            }
         }).ConfigureAwait(false);
     }
 
@@ -461,13 +458,7 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
         {
             if (!_framework.IsInFrameworkUpdateThread)
             {
-                var result = await _framework.RunOnFrameworkThread(func).ContinueWith((task) => task.Result).ConfigureAwait(false);
-                while (_framework.IsInFrameworkUpdateThread) // yield the thread again, should technically never be triggered
-                {
-                    _logger.LogTrace("Still on framework");
-                    await Task.Delay(1).ConfigureAwait(false);
-                }
-                return result;
+                return await _framework.RunOnFrameworkThread(func).ConfigureAwait(false);
             }
 
             return func.Invoke();

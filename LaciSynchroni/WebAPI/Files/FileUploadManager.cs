@@ -124,8 +124,8 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         var channel = Channel.CreateBounded<CompressedUploadItem>(new BoundedChannelOptions(CompressionPipelineDepth)
         {
             FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = true
+            SingleReader = false,  // Allow multiple concurrent consumers for parallel uploads
+            SingleWriter = true    // Keep single producer for ordered compression
         });
 
         var uploadCount = filesToUpload.Count;

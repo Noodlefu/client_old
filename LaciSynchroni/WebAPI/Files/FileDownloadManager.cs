@@ -937,7 +937,11 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         try
         {
             var entry = _fileDbManager.CreateCacheEntry(filePath);
-            if (entry != null && !string.Equals(entry.Hash, fileHash, StringComparison.OrdinalIgnoreCase))
+            if (entry == null)
+            {
+                Logger.LogError("Failed to create cache entry for downloaded file {filePath} with hash {hash} - file will be re-downloaded on next sync", filePath, fileHash);
+            }
+            else if (!string.Equals(entry.Hash, fileHash, StringComparison.OrdinalIgnoreCase))
             {
                 Logger.LogError("Hash mismatch after extracting, got {hash}, expected {expectedHash}, deleting file", entry.Hash, fileHash);
                 File.Delete(filePath);
@@ -946,7 +950,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Error creating cache entry");
+            Logger.LogWarning(ex, "Error creating cache entry for {filePath}", filePath);
         }
     }
 

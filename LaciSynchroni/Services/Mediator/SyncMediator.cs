@@ -3,9 +3,11 @@ using LaciSynchroni.SyncConfiguration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 
 namespace LaciSynchroni.Services.Mediator;
 
@@ -16,10 +18,16 @@ public sealed class SyncMediator : IHostedService
     private readonly ConcurrentDictionary<object, DateTime> _lastErrorTime = [];
     private readonly ILogger<SyncMediator> _logger;
     private readonly CancellationTokenSource _loopCts = new();
-    private readonly ConcurrentQueue<MessageBase> _messageQueue = new();
+    private readonly Channel<MessageBase> _messageChannel = Channel.CreateUnbounded<MessageBase>(new UnboundedChannelOptions
+    {
+        SingleReader = true,
+        SingleWriter = false
+    });
     private readonly PerformanceCollectorService _performanceCollector;
     private readonly SyncConfigService _syncConfigService;
     private readonly ConcurrentDictionary<Type, HashSet<SubscriberAction>> _subscriberDict = [];
+    /// <summary>Cached immutable snapshots of subscribers per message type, invalidated on subscribe/unsubscribe.</summary>
+    private readonly ConcurrentDictionary<Type, ImmutableList<SubscriberAction>> _subscriberCache = [];
     private bool _processQueue = false;
     private readonly ConcurrentDictionary<Type, MethodInfo?> _genericExecuteMethods = new();
     public SyncMediator(ILogger<SyncMediator> logger, PerformanceCollectorService performanceCollector, SyncConfigService syncConfigService,
@@ -58,7 +66,7 @@ public sealed class SyncMediator : IHostedService
         }
         else
         {
-            _messageQueue.Enqueue(message);
+            _messageChannel.Writer.TryWrite(message);
         }
     }
 
@@ -68,23 +76,16 @@ public sealed class SyncMediator : IHostedService
 
         _taskTracker.Run(async () =>
         {
-            while (!_loopCts.Token.IsCancellationRequested)
+            // Wait for queue processing to be enabled
+            while (!_processQueue && !_loopCts.Token.IsCancellationRequested)
             {
-                while (!_processQueue)
-                {
-                    await Task.Delay(100, _loopCts.Token).ConfigureAwait(false);
-                }
-
                 await Task.Delay(100, _loopCts.Token).ConfigureAwait(false);
+            }
 
-                HashSet<MessageBase> processedMessages = [];
-                while (_messageQueue.TryDequeue(out var message))
-                {
-                    if (processedMessages.Contains(message)) { continue; }
-                    processedMessages.Add(message);
-
-                    ExecuteMessage(message);
-                }
+            // Process messages as they arrive using async enumeration (no polling!)
+            await foreach (var message in _messageChannel.Reader.ReadAllAsync(_loopCts.Token).ConfigureAwait(false))
+            {
+                ExecuteMessage(message);
             }
         }, "SyncMediator.MessageLoop", _loopCts.Token);
 
@@ -95,7 +96,7 @@ public sealed class SyncMediator : IHostedService
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        _messageQueue.Clear();
+        _messageChannel.Writer.Complete();
         _loopCts.Cancel();
         _loopCts.Dispose();
         return Task.CompletedTask;
@@ -111,6 +112,9 @@ public sealed class SyncMediator : IHostedService
             {
                 throw new InvalidOperationException("Already subscribed");
             }
+
+            // Invalidate cache for this message type
+            _subscriberCache.TryRemove(typeof(T), out _);
         }
     }
 
@@ -121,6 +125,9 @@ public sealed class SyncMediator : IHostedService
             if (_subscriberDict.ContainsKey(typeof(T)))
             {
                 _subscriberDict[typeof(T)].RemoveWhere(p => p.Subscriber == subscriber);
+
+                // Invalidate cache for this message type
+                _subscriberCache.TryRemove(typeof(T), out _);
             }
         }
     }
@@ -135,6 +142,9 @@ public sealed class SyncMediator : IHostedService
                 if (unSubbed > 0)
                 {
                     _logger.LogDebug("{sub} unsubscribed from {msg}", subscriber.GetType().Name, kvp.Name);
+
+                    // Invalidate cache for this message type
+                    _subscriberCache.TryRemove(kvp, out _);
                 }
             }
         }
@@ -142,16 +152,31 @@ public sealed class SyncMediator : IHostedService
 
     private void ExecuteMessage(MessageBase message)
     {
-        if (!_subscriberDict.TryGetValue(message.GetType(), out HashSet<SubscriberAction>? subscribers) || subscribers == null || !subscribers.Any()) return;
+        var msgType = message.GetType();
 
-        List<SubscriberAction> subscribersCopy = [];
-        lock (_addRemoveLock)
+        // Try to get cached subscriber list, or build and cache it
+        if (!_subscriberCache.TryGetValue(msgType, out var subscribersList))
         {
-            subscribersCopy = subscribers?.Where(s => s.Subscriber != null).OrderBy(k => k.Subscriber is IHighPriorityMediatorSubscriber ? 0 : 1).ToList() ?? [];
+            if (!_subscriberDict.TryGetValue(msgType, out HashSet<SubscriberAction>? subscribers) || subscribers == null || subscribers.Count == 0)
+                return;
+
+            lock (_addRemoveLock)
+            {
+                // Double-check after acquiring lock
+                if (!_subscriberCache.TryGetValue(msgType, out subscribersList))
+                {
+                    subscribersList = subscribers
+                        .Where(s => s.Subscriber != null)
+                        .OrderBy(k => k.Subscriber is IHighPriorityMediatorSubscriber ? 0 : 1)
+                        .ToImmutableList();
+                    _subscriberCache[msgType] = subscribersList;
+                }
+            }
         }
 
+        if (subscribersList.Count == 0) return;
+
 #pragma warning disable S3011 // Reflection should not be used to increase accessibility of classes, methods, or fields
-        var msgType = message.GetType();
         if (!_genericExecuteMethods.TryGetValue(msgType, out var methodInfo))
         {
             _genericExecuteMethods[msgType] = methodInfo = GetType()
@@ -159,11 +184,11 @@ public sealed class SyncMediator : IHostedService
                  .MakeGenericMethod(msgType);
         }
 
-        methodInfo!.Invoke(this, [subscribersCopy, message]);
+        methodInfo!.Invoke(this, [subscribersList, message]);
 #pragma warning restore S3011 // Reflection should not be used to increase accessibility of classes, methods, or fields
     }
 
-    private void ExecuteReflected<T>(List<SubscriberAction> subscribers, T message) where T : MessageBase
+    private void ExecuteReflected<T>(ImmutableList<SubscriberAction> subscribers, T message) where T : MessageBase
     {
         foreach (SubscriberAction subscriber in subscribers)
         {
