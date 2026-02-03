@@ -46,26 +46,20 @@ public sealed class CharaDataFileHandler : IDisposable
     {
         modPaths = [];
         // Use Dictionary for O(1) lookup instead of List.Find() which is O(n)
-        var missingFilesByHash = new Dictionary<string, FileReplacementData>(StringComparer.Ordinal);
+        var missingFilesByHash = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
         foreach (var file in charaDataDownloadDto.FileGamePaths)
         {
             var localCacheFile = _fileCacheManager.GetFileCacheByHash(file.HashOrFileSwap);
             if (localCacheFile == null)
             {
-                if (missingFilesByHash.TryGetValue(file.HashOrFileSwap, out var existingFile))
+                if (missingFilesByHash.TryGetValue(file.HashOrFileSwap, out var existingPaths))
                 {
-                    // Use List internally to avoid repeated array allocations
-                    existingFile.GamePathsList.Add(file.GamePath);
+                    existingPaths.Add(file.GamePath);
                 }
                 else
                 {
-                    var newFile = new FileReplacementData()
-                    {
-                        Hash = file.HashOrFileSwap,
-                    };
-                    newFile.GamePathsList.Add(file.GamePath);
-                    missingFilesByHash[file.HashOrFileSwap] = newFile;
+                    missingFilesByHash[file.HashOrFileSwap] = [file.GamePath];
                 }
             }
             else
@@ -74,8 +68,12 @@ public sealed class CharaDataFileHandler : IDisposable
             }
         }
 
-        // Convert dictionary values to list (GamePaths array is populated lazily from GamePathsList)
-        missingFiles = [.. missingFilesByHash.Values];
+        // Convert to FileReplacementData list
+        missingFiles = missingFilesByHash.Select(kvp => new FileReplacementData
+        {
+            Hash = kvp.Key,
+            GamePaths = [.. kvp.Value]
+        }).ToList();
 
         foreach (var swap in charaDataDownloadDto.FileSwaps)
         {

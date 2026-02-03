@@ -68,8 +68,7 @@ namespace LaciSynchroni.Services
 
             lock (_resourceLock)
             {
-                var existingLock = _renderLocks.GetValueOrDefault(playerNameHash, null);
-                if (existingLock == null)
+                if (!_renderLocks.TryGetValue(playerNameHash, out var existingLock))
                 {
                     return true;
                 }

@@ -34,7 +34,8 @@ public abstract class DrawFolderBase : IDrawFolder
 
         using var id = ImRaii.PushId("folder_" + ComponentId);
         var color = ImRaii.PushColor(ImGuiCol.ChildBg, ImGui.GetColorU32(ImGuiCol.FrameBgHovered), _wasHovered);
-        using (ImRaii.Child("folder__" + ComponentId, new Vector2(UiSharedService.GetWindowContentRegionWidth() - ImGui.GetCursorPosX(), ImGui.GetFrameHeight())))
+        using var padding = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        using (ImRaii.Child("folder__" + ComponentId, new Vector2(UiSharedService.GetWindowContentRegionWidth() - ImGui.GetCursorPosX(), ImGui.GetFrameHeight()), false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
             // draw opener
             var icon = IsOpen ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight;
@@ -89,8 +90,10 @@ public abstract class DrawFolderBase : IDrawFolder
         if (DrawPairs.Any())
         {
             // Use list clipper for virtualization - only draw visible items
+            // Item height includes frame height plus vertical item spacing
+            var itemHeight = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.Y;
             var clipper = ImGui.ImGuiListClipper();
-            clipper.Begin(DrawPairs.Count, ImGui.GetFrameHeight());
+            clipper.Begin(DrawPairs.Count, itemHeight);
             while (clipper.Step())
             {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
@@ -113,7 +116,7 @@ public abstract class DrawFolderBase : IDrawFolder
     {
         var barButtonSize = _uiSharedService.GetIconButtonSize(FontAwesomeIcon.EllipsisV);
         var spacingX = ImGui.GetStyle().ItemSpacing.X;
-        var windowEndX = ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth();
+        var windowEndX = ImGui.GetWindowContentRegionMax().X;
 
         // Flyout Menu
         var rightSideStart = windowEndX - (RenderMenu ? (barButtonSize.X + spacingX) : spacingX);

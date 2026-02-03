@@ -149,6 +149,7 @@ public class DrawVisibleTagFolder : DrawCustomTag
         var isOpen = _openGroups.Contains(key);
         var wasHovered = _hoveredGroups.TryGetValue(key, out var hovered) && hovered;
         var color = ImRaii.PushColor(ImGuiCol.ChildBg, ImGui.GetColorU32(ImGuiCol.FrameBgHovered), wasHovered);
+        using var padding = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, System.Numerics.Vector2.Zero);
 
         using (ImRaii.Child($"visible-group-row-{key.WorldId}-{key.Name}", new System.Numerics.Vector2(UiSharedService.GetWindowContentRegionWidth() - ImGui.GetCursorPosX(), ImGui.GetFrameHeight()), false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
@@ -210,7 +211,7 @@ public class DrawVisibleTagFolder : DrawCustomTag
         var caretWidth = _uiSharedService.GetIconSize(FontAwesomeIcon.CaretRight).X;
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         var childIndent = caretWidth + spacing;
-        
+
         using var indent = ImRaii.PushIndent(childIndent, false);
         foreach (var member in members)
         {
@@ -235,7 +236,7 @@ public class DrawVisibleTagFolder : DrawCustomTag
         {
             var pair = member.Pair;
             var serverName = _apiController.GetServerNameByIndex(pair.ServerIndex);
-            
+
             sb.AppendLine().Append("• ").Append(serverName);
 
             string statusLine;
@@ -295,22 +296,22 @@ public class DrawVisibleTagFolder : DrawCustomTag
         foreach (var member in members)
         {
             var pair = member.Pair;
-            
+
             if (pair.UserPair is null)
             {
                 continue;
             }
-            
-            if (config.UIDsToIgnore.Exists(uid => 
-                string.Equals(uid, pair.UserPair.User.Alias, StringComparison.Ordinal) || 
+
+            if (config.UIDsToIgnore.Exists(uid =>
+                string.Equals(uid, pair.UserPair.User.Alias, StringComparison.Ordinal) ||
                 string.Equals(uid, pair.UserPair.User.UID, StringComparison.Ordinal)))
             {
                 continue;
             }
 
-            bool exceedsVram = config.VRAMSizeWarningThresholdMiB > 0 
+            bool exceedsVram = config.VRAMSizeWarningThresholdMiB > 0
                 && config.VRAMSizeWarningThresholdMiB * 1024 * 1024 < pair.LastAppliedApproximateVRAMBytes;
-            bool exceedsTris = config.TrisWarningThresholdThousands > 0 
+            bool exceedsTris = config.TrisWarningThresholdThousands > 0
                 && config.TrisWarningThresholdThousands * 1000 < pair.LastAppliedDataTris;
 
             if ((exceedsVram || exceedsTris) && (!pair.UserPair.OwnPermissions.IsSticky() || config.WarnOnPreferredPermissionsExceedingThresholds))
@@ -353,4 +354,3 @@ public class DrawVisibleTagFolder : DrawCustomTag
         }
     }
 }
-

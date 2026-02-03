@@ -15,6 +15,23 @@ using System.Text;
 
 namespace LaciSynchroni.WebAPI.Files;
 
+/// <summary>
+/// Exception thrown when a server returns an empty (0 byte) file response.
+/// This typically indicates the file is missing or unavailable on the CDN.
+/// </summary>
+public class EmptyFileResponseException : Exception
+{
+    public string Url { get; }
+    public long? ContentLength { get; }
+
+    public EmptyFileResponseException(string url, long? contentLength)
+        : base($"Server returned empty file (0 bytes) for {url}. Content-Length: {contentLength?.ToString() ?? "not set"}")
+    {
+        Url = url;
+        ContentLength = contentLength;
+    }
+}
+
 public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 {
     private const int MaxRetryAttempts = 3;
@@ -225,6 +242,10 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             catch (InvalidDataException)
             {
                 throw; // Don't retry on 404/401 errors
+            }
+            catch (EmptyFileResponseException)
+            {
+                throw; // Don't retry when server returns empty file - it's not going to change
             }
             catch (Exception ex)
             {
@@ -463,7 +484,23 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             await _decompressGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try
             {
-                decompressedFile = LZ4Wrapper.Unwrap(compressedData);
+                if (compressedData.Length == 0)
+                {
+                    throw new InvalidDataException("Downloaded file is empty (0 bytes)");
+                }
+
+                try
+                {
+                    decompressedFile = LZ4Wrapper.Unwrap(compressedData);
+                }
+                catch (Exception lz4Ex)
+                {
+                    // Log details about the failed data for debugging
+                    var preview = compressedData.Length > 32 ? Convert.ToHexString(compressedData.AsSpan(0, 32)) : Convert.ToHexString(compressedData);
+                    Logger.LogWarning(lz4Ex, "{dlName}: LZ4 decompression failed for {fileHash}. Data length: {len}, First bytes: {preview}",
+                        downloadName, fileHash, compressedData.Length, preview);
+                    throw;
+                }
             }
             finally
             {
@@ -688,6 +725,14 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 _fileDbManager.FailFileDownload(directDownload.Hash, new OperationCanceledException());
                 ClearDownload();
             }
+            catch (EmptyFileResponseException ex)
+            {
+                // Server returned empty file - this file is unavailable on the CDN
+                // Add to forbidden transfers so we don't keep trying, and log once at Info level
+                Logger.LogInformation("{Hash}: File unavailable on server (empty response from {Url}). Skipping this file.", directDownload.Hash, ex.Url);
+                _orchestrator.TryAddForbiddenTransfer(directDownload);
+                _fileDbManager.FailFileDownload(directDownload.Hash, ex);
+            }
             catch (Exception ex)
             {
                 Logger.LogError(ex, "{Hash}: Error during direct download.", directDownload.Hash);
@@ -730,6 +775,10 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             catch (InvalidDataException)
             {
                 throw; // Don't retry on 404/401 errors
+            }
+            catch (EmptyFileResponseException)
+            {
+                throw; // Don't retry when server returns empty file - it's not going to change
             }
             catch (Exception ex)
             {
@@ -827,12 +876,19 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             var fileStream = File.Create(destinationFilename);
             await using (fileStream.ConfigureAwait(false))
             {
-                var bufferSize = response.Content.Headers.ContentLength > LargeDownloadThreshold ? LargeDownloadBufferSize : SmallDownloadBufferSize;
+                var contentLength = response.Content.Headers.ContentLength;
+                var bufferSize = contentLength > LargeDownloadThreshold ? LargeDownloadBufferSize : SmallDownloadBufferSize;
                 var buffer = new byte[bufferSize];
 
+                if (contentLength == 0)
+                {
+                    Logger.LogDebug("Server returned Content-Length: 0 for {RequestUrl}", requestUrl);
+                }
+
                 var bytesRead = 0;
+                long totalBytesRead = 0;
                 var limit = _orchestrator.DownloadLimitPerSlot();
-                Logger.LogTrace("Starting Download with a speed limit of {Limit} to {TempPath}", limit, destinationFilename);
+                Logger.LogTrace("Starting Download with a speed limit of {Limit} to {TempPath}, Content-Length: {ContentLength}", limit, destinationFilename, contentLength);
                 stream = new ThrottledStream(await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false), limit);
                 lock (_activeDownloadStreamsLock)
                 {
@@ -854,6 +910,8 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
                     if (bytesRead == 0) break;
 
+                    totalBytesRead += bytesRead;
+
                     // Reset timeout for next read
                     timeoutCts.TryReset();
                     timeoutCts.CancelAfter(ReadActivityTimeout);
@@ -863,7 +921,12 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     progress.Report(bytesRead);
                 }
 
-                Logger.LogDebug("{RequestUrl} downloaded to {TempPath}", requestUrl, destinationFilename);
+                if (totalBytesRead == 0)
+                {
+                    throw new EmptyFileResponseException(requestUrl.ToString(), contentLength);
+                }
+
+                Logger.LogDebug("{RequestUrl} downloaded to {TempPath}, {TotalBytes} bytes", requestUrl, destinationFilename, totalBytesRead);
             }
         }
         catch (OperationCanceledException)

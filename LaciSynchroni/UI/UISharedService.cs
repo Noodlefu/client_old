@@ -141,6 +141,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
     {
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
         {
+            using var padding = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(8, 8));
             ImGui.BeginTooltip();
             ImGui.PushTextWrapPos(ImGui.GetFontSize() * 35f);
             if (text.Contains(TooltipSeparator, StringComparison.Ordinal))

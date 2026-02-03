@@ -70,7 +70,7 @@ public class DrawUserPair
             pairingMethods.Add("You are directly Paired");
             return string.Join(Environment.NewLine, pairingMethods);
         }
-        
+
         if (_pair.IndividualPairStatus == IndividualPairStatus.OneSided)
         {
             pairingMethods.Add("User has not added you back");
@@ -181,21 +181,21 @@ public class DrawUserPair
             sb.Append(prefix);
         }
         sb.Append("Mods Info").AppendLine();
-        
+
         if (pair.LastAppliedDataBytes >= 0)
         {
             sb.Append("Files Size: ")
                 .Append(UiSharedService.ByteToString(pair.LastAppliedDataBytes, true))
                 .AppendLine();
         }
-        
+
         if (pair.LastAppliedApproximateVRAMBytes >= 0)
         {
             sb.Append("Approx. VRAM Usage: ")
                 .Append(UiSharedService.ByteToString(pair.LastAppliedApproximateVRAMBytes, true))
                 .AppendLine();
         }
-        
+
         if (pair.LastAppliedDataTris >= 0)
         {
             var tris = pair.LastAppliedDataTris > 1000
@@ -232,7 +232,8 @@ public class DrawUserPair
     {
         using var id = ImRaii.PushId(GetType() + _id);
         var color = ImRaii.PushColor(ImGuiCol.ChildBg, ImGui.GetColorU32(ImGuiCol.FrameBgHovered), _wasHovered);
-        using (ImRaii.Child(GetType() + _id, new Vector2(UiSharedService.GetWindowContentRegionWidth() - ImGui.GetCursorPosX(), ImGui.GetFrameHeight())))
+        using var padding = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        using (ImRaii.Child(GetType() + _id, new Vector2(UiSharedService.GetWindowContentRegionWidth() - ImGui.GetCursorPosX(), ImGui.GetFrameHeight()), false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse))
         {
             DrawLeftSide(showTooltip, showIcon, showWarning);
             ImGui.SameLine();
@@ -462,7 +463,7 @@ public class DrawUserPair
         var pauseButtonSize = _uiSharedService.GetIconButtonSize(pauseIcon);
         var barButtonSize = _uiSharedService.GetIconButtonSize(FontAwesomeIcon.EllipsisV);
         var spacingX = ImGui.GetStyle().ItemSpacing.X;
-        var windowEndX = ImGui.GetWindowContentRegionMin().X + UiSharedService.GetWindowContentRegionWidth();
+        var windowEndX = ImGui.GetWindowContentRegionMax().X;
         float currentRightSide = windowEndX - barButtonSize.X;
 
         ImGui.SameLine(currentRightSide);
