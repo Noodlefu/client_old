@@ -3,6 +3,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
+using LaciSynchroni.PlayerData.Factories;
 using LaciSynchroni.Services;
 using LaciSynchroni.Utils;
 using Microsoft.Extensions.Logging;
@@ -90,9 +91,52 @@ public partial class SettingsUi
         _uiShared.DrawHelpText("Unless you have been asked to enable this, please leave it unchecked." + UiSharedService.TooltipSeparator
             + "This may cause communication issues with servers. Any change to this setting requires a plugin restart.");
 
+        DrawAnimationSettings();
         DrawRenderLocks();
+    }
 
+    private void DrawAnimationSettings()
+    {
+        _uiShared.BigText("Animation & Bones");
+        UiSharedService.TextWrapped("Animation validation protects you from sending animations with incompatible bone data that could crash other players' games.");
 
+        var currentMode = _configService.Current.AnimationValidationMode;
+        var modeNames = new[] { "Unsafe (No validation)", "Safe (Recommended)", "Safest (Strict)" };
+        var selectedIndex = (int)currentMode;
+
+        ImGui.SetNextItemWidth(200 * ImGuiHelpers.GlobalScale);
+        if (ImGui.Combo("Animation Validation Mode", ref selectedIndex, modeNames, modeNames.Length))
+        {
+            _configService.Current.AnimationValidationMode = (AnimationValidationMode)selectedIndex;
+            _configService.Save();
+        }
+        _uiShared.DrawHelpText("Controls how strictly animation bone indices are validated before sending to other players."
+            + Environment.NewLine + "Unsafe: No validation, animations are sent as-is (original behavior)"
+            + Environment.NewLine + "Safe: Validates bone indices against your skeleton, with some tolerance"
+            + Environment.NewLine + "Safest: Strict validation, bone indices must exactly match your skeleton");
+
+        using (ImRaii.Disabled(currentMode == AnimationValidationMode.Unsafe))
+        {
+            using var indent = ImRaii.PushIndent();
+
+            var allowOneBasedShift = _configService.Current.AnimationAllowOneBasedShift;
+            if (ImGui.Checkbox("Allow one-based index shift tolerance", ref allowOneBasedShift))
+            {
+                _configService.Current.AnimationAllowOneBasedShift = allowOneBasedShift;
+                _configService.Save();
+            }
+            _uiShared.DrawHelpText("Allows for differences between zero-based and one-based bone indexing. "
+                + "Some animation tools use different base indices.");
+
+            var allowNeighborTolerance = _configService.Current.AnimationAllowNeighborIndexTolerance;
+            if (ImGui.Checkbox("Allow neighbor index tolerance", ref allowNeighborTolerance))
+            {
+                _configService.Current.AnimationAllowNeighborIndexTolerance = allowNeighborTolerance;
+                _configService.Save();
+            }
+            _uiShared.DrawHelpText("Allows bone indices that are off by one from valid indices. "
+                + "Only applies in Safe mode.");
+        }
     }
 
     private void DrawFileStorageSettings()

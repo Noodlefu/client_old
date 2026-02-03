@@ -6,6 +6,7 @@ using LaciSynchroni.PlayerData.Data;
 using LaciSynchroni.PlayerData.Handlers;
 using LaciSynchroni.Services;
 using LaciSynchroni.Services.Mediator;
+using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.SyncConfiguration.Models;
 using Microsoft.Extensions.Logging;
 
@@ -20,11 +21,13 @@ public class PlayerDataFactory
     private readonly PerformanceCollectorService _performanceCollector;
     private readonly XivDataAnalyzer _modelAnalyzer;
     private readonly SyncMediator _syncMediator;
+    private readonly SyncConfigService _syncConfigService;
     private readonly TransientResourceManager _transientResourceManager;
 
     public PlayerDataFactory(ILogger<PlayerDataFactory> logger, DalamudUtilService dalamudUtil, IpcManager ipcManager,
         TransientResourceManager transientResourceManager, FileCacheManager fileReplacementFactory,
-        PerformanceCollectorService performanceCollector, XivDataAnalyzer modelAnalyzer, SyncMediator syncMediator)
+        PerformanceCollectorService performanceCollector, XivDataAnalyzer modelAnalyzer, SyncMediator syncMediator,
+        SyncConfigService syncConfigService)
     {
         _logger = logger;
         _dalamudUtil = dalamudUtil;
@@ -34,6 +37,7 @@ public class PlayerDataFactory
         _performanceCollector = performanceCollector;
         _modelAnalyzer = modelAnalyzer;
         _syncMediator = syncMediator;
+        _syncConfigService = syncConfigService;
         _logger.LogTrace("Creating {This}", GetType().Name);
     }
 
@@ -276,6 +280,17 @@ public class PlayerDataFactory
 
         if (boneIndices.All(u => u.Value.Count == 0)) return;
 
+        var validationMode = _syncConfigService.Current.AnimationValidationMode;
+        var allowOneBasedShift = _syncConfigService.Current.AnimationAllowOneBasedShift;
+        var allowNeighborTolerance = _syncConfigService.Current.AnimationAllowNeighborIndexTolerance;
+
+        // If in Unsafe mode, skip validation entirely
+        if (validationMode == AnimationValidationMode.Unsafe)
+        {
+            _logger.LogDebug("Animation validation mode is Unsafe, skipping bone validation");
+            return;
+        }
+
         int noValidationFailed = 0;
         foreach (var file in fragment.FileReplacements.Where(f => !f.IsFileSwap && f.GamePaths.First().EndsWith("pap", StringComparison.OrdinalIgnoreCase)).ToList())
         {
@@ -283,26 +298,24 @@ public class PlayerDataFactory
 
             var skeletonIndices = await _dalamudUtil.RunOnFrameworkThread(() => _modelAnalyzer.GetBoneIndicesFromPap(file.Hash)).ConfigureAwait(false);
             bool validationFailed = false;
+            string failReason = string.Empty;
+
             if (skeletonIndices != null)
             {
-                // 105 is the maximum vanilla skellington spoopy bone index
-                if (skeletonIndices.All(k => k.Value.Max() <= 105))
+                // 105 is the maximum vanilla skeleton bone index
+                if (skeletonIndices.All(k => k.Value.Count == 0 || k.Value.Max() <= 105))
                 {
                     _logger.LogTrace("All indices of {path} are <= 105, ignoring", file.ResolvedPath);
                     continue;
                 }
 
-                _logger.LogDebug("Verifying bone indices for {path}, found {x} skeletons", file.ResolvedPath, skeletonIndices.Count);
+                _logger.LogDebug("Verifying bone indices for {path}, found {x} skeletons (mode: {mode})", file.ResolvedPath, skeletonIndices.Count, validationMode);
 
-                foreach (var boneCount in skeletonIndices.Select(k => k).ToList())
+                // Use the new IsPapCompatible method
+                if (!_modelAnalyzer.IsPapCompatible(boneIndices, skeletonIndices, validationMode, allowOneBasedShift, allowNeighborTolerance, out failReason))
                 {
-                    if (boneCount.Value.Max() > boneIndices.SelectMany(b => b.Value).Max())
-                    {
-                        _logger.LogWarning("Found more bone indices on the animation {path} skeleton {skl} (max indice {idx}) than on any player related skeleton (max indice {idx2})",
-                            file.ResolvedPath, boneCount.Key, boneCount.Value.Max(), boneIndices.SelectMany(b => b.Value).Max());
-                        validationFailed = true;
-                        break;
-                    }
+                    _logger.LogWarning("Animation validation failed for {path}: {reason}", file.ResolvedPath, failReason);
+                    validationFailed = true;
                 }
             }
 

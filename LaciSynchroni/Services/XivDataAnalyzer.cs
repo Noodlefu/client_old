@@ -5,10 +5,12 @@ using FFXIVClientStructs.Havok.Common.Base.Types;
 using FFXIVClientStructs.Havok.Common.Serialize.Util;
 using LaciSynchroni.FileCache;
 using LaciSynchroni.Interop.GameModel;
+using LaciSynchroni.PlayerData.Factories;
 using LaciSynchroni.PlayerData.Handlers;
 using LaciSynchroni.SyncConfiguration;
 using Microsoft.Extensions.Logging;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 namespace LaciSynchroni.Services;
 
@@ -210,5 +212,157 @@ public sealed class XivDataAnalyzer
             _logger.LogWarning(e, "Could not parse file {file}", filePath);
             return 0;
         }
+    }
+
+    // Regex patterns for canonicalizing skeleton keys (e.g., extracting "c0101" from paths)
+    private static readonly Regex SkeletonKeyPattern1 = new(@"chara/human/(c\d{4})/", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SkeletonKeyPattern2 = new(@"(c\d{4})_", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SkeletonKeyPattern3 = new(@"_(c\d{4})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Canonicalizes a skeleton key from a full path or skeleton name to a bucket code like "c0101".
+    /// </summary>
+    public static string CanonicalizeSkeletonKey(string skeletonKey)
+    {
+        // Try pattern 1: chara/human/c0101/...
+        var match = SkeletonKeyPattern1.Match(skeletonKey);
+        if (match.Success) return match.Groups[1].Value.ToLowerInvariant();
+
+        // Try pattern 2: c0101_something
+        match = SkeletonKeyPattern2.Match(skeletonKey);
+        if (match.Success) return match.Groups[1].Value.ToLowerInvariant();
+
+        // Try pattern 3: something_c0101
+        match = SkeletonKeyPattern3.Match(skeletonKey);
+        if (match.Success) return match.Groups[1].Value.ToLowerInvariant();
+
+        // Return original if no pattern matches
+        return skeletonKey.ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Checks if a PAP file's bone indices are compatible with the local skeleton.
+    /// </summary>
+    /// <param name="localBoneBuckets">Dictionary of canonical skeleton keys to their bone indices</param>
+    /// <param name="papBoneIndices">Dictionary of skeleton names from the PAP to their bone indices</param>
+    /// <param name="mode">Validation strictness mode</param>
+    /// <param name="allowOneBasedShift">If true, allows for one-based vs zero-based index differences</param>
+    /// <param name="allowNeighborTolerance">If true, allows neighboring index tolerance (±1)</param>
+    /// <param name="reason">Output parameter explaining why validation failed, if it did</param>
+    /// <returns>True if the PAP is compatible, false otherwise</returns>
+    public bool IsPapCompatible(
+        Dictionary<string, List<ushort>> localBoneBuckets,
+        Dictionary<string, List<ushort>> papBoneIndices,
+        AnimationValidationMode mode,
+        bool allowOneBasedShift,
+        bool allowNeighborTolerance,
+        out string reason)
+    {
+        reason = string.Empty;
+
+        if (mode == AnimationValidationMode.Unsafe)
+        {
+            return true; // No validation in unsafe mode
+        }
+
+        // Canonicalize local bone buckets
+        var canonicalLocalBuckets = new Dictionary<string, HashSet<ushort>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in localBoneBuckets)
+        {
+            var canonicalKey = CanonicalizeSkeletonKey(kvp.Key);
+            if (!canonicalLocalBuckets.TryGetValue(canonicalKey, out var set))
+            {
+                set = new HashSet<ushort>();
+                canonicalLocalBuckets[canonicalKey] = set;
+            }
+            foreach (var idx in kvp.Value)
+            {
+                set.Add(idx);
+            }
+        }
+
+        // Create a combined "any" bucket with all local bone indices for fallback matching
+        var anyBucket = new HashSet<ushort>();
+        foreach (var set in canonicalLocalBuckets.Values)
+        {
+            foreach (var idx in set)
+            {
+                anyBucket.Add(idx);
+            }
+        }
+
+        // Check each PAP skeleton's bone indices
+        foreach (var papKvp in papBoneIndices)
+        {
+            var papCanonicalKey = CanonicalizeSkeletonKey(papKvp.Key);
+            var papBones = papKvp.Value;
+
+            if (papBones.Count == 0) continue;
+
+            // Find matching local bucket or use "any" bucket as fallback
+            HashSet<ushort>? targetBucket = null;
+            if (canonicalLocalBuckets.TryGetValue(papCanonicalKey, out var matchedBucket))
+            {
+                targetBucket = matchedBucket;
+            }
+            else
+            {
+                // Use combined bucket as fallback
+                targetBucket = anyBucket;
+                _logger.LogTrace("No exact skeleton match for {papKey}, using combined bucket", papCanonicalKey);
+            }
+
+            if (targetBucket.Count == 0)
+            {
+                reason = $"No local bone data available for skeleton {papCanonicalKey}";
+                return false;
+            }
+
+            var maxLocalBone = targetBucket.Max();
+
+            foreach (var papBoneIdx in papBones)
+            {
+                bool isValid = false;
+
+                // Direct match
+                if (targetBucket.Contains(papBoneIdx))
+                {
+                    isValid = true;
+                }
+                // One-based shift tolerance (PAP might use 0-based while skeleton uses 1-based or vice versa)
+                else if (allowOneBasedShift && mode != AnimationValidationMode.Safest)
+                {
+                    if (targetBucket.Contains((ushort)(papBoneIdx + 1)) ||
+                        (papBoneIdx > 0 && targetBucket.Contains((ushort)(papBoneIdx - 1))))
+                    {
+                        isValid = true;
+                    }
+                }
+                // Neighbor tolerance (allows ±1 for edge cases)
+                else if (allowNeighborTolerance && mode == AnimationValidationMode.Safe)
+                {
+                    if (targetBucket.Contains((ushort)(papBoneIdx + 1)) ||
+                        (papBoneIdx > 0 && targetBucket.Contains((ushort)(papBoneIdx - 1))))
+                    {
+                        isValid = true;
+                    }
+                }
+
+                // In Safe mode, also allow if bone index is within the max range
+                if (!isValid && mode == AnimationValidationMode.Safe && papBoneIdx <= maxLocalBone)
+                {
+                    isValid = true;
+                }
+
+                if (!isValid)
+                {
+                    reason = $"PAP bone index {papBoneIdx} (skeleton: {papCanonicalKey}) not found in local skeleton (max: {maxLocalBone})";
+                    _logger.LogDebug("Animation validation failed: {reason}", reason);
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 }

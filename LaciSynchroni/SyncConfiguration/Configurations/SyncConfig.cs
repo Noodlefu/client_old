@@ -1,4 +1,5 @@
-﻿using LaciSynchroni.SyncConfiguration.Models;
+﻿using LaciSynchroni.PlayerData.Factories;
+using LaciSynchroni.SyncConfiguration.Models;
 using LaciSynchroni.UI;
 using Microsoft.Extensions.Logging;
 
@@ -8,6 +9,9 @@ namespace LaciSynchroni.SyncConfiguration.Configurations;
 public class SyncConfig : ISyncConfiguration
 {
     public bool AcceptedAgreement { get; set; } = false;
+    public AnimationValidationMode AnimationValidationMode { get; set; } = AnimationValidationMode.Unsafe;
+    public bool AnimationAllowOneBasedShift { get; set; } = false;
+    public bool AnimationAllowNeighborIndexTolerance { get; set; } = false;
     public string CacheFolder { get; set; } = string.Empty;
     public bool DisableOptionalPluginWarnings { get; set; } = false;
     public bool EnableDtrEntry { get; set; } = false;
