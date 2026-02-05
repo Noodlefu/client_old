@@ -9,7 +9,6 @@ using LaciSynchroni.PlayerData.Factories;
 using LaciSynchroni.PlayerData.Handlers;
 using LaciSynchroni.SyncConfiguration;
 using Microsoft.Extensions.Logging;
-using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace LaciSynchroni.Services;
@@ -74,77 +73,91 @@ public sealed class XivDataAnalyzer
 
         using BinaryReader reader = new BinaryReader(File.Open(cacheEntity.ResolvedFilepath, FileMode.Open, FileAccess.Read, FileShare.Read));
 
-        // most of this shit is from vfxeditor, surely nothing will change in the pap format :copium:
-        reader.ReadInt32(); // ignore
-        reader.ReadInt32(); // ignore
-        reader.ReadInt16(); // read 2 (num animations)
-        reader.ReadInt16(); // read 2 (modelid)
-        var type = reader.ReadByte();// read 1 (type)
-        if (type != 0) return null; // it's not human, just ignore it, whatever
+        // PAP header parsing (format from vfxeditor)
+        reader.ReadInt32(); // magic
+        reader.ReadInt32(); // version
+        reader.ReadInt16(); // num animations
+        reader.ReadInt16(); // model id
+        var type = reader.ReadByte(); // type
+        if (type != 0) return null; // not human, skip
 
-        reader.ReadByte(); // read 1 (variant)
-        reader.ReadInt32(); // ignore
+        reader.ReadByte(); // variant
+        reader.ReadInt32(); // padding
         var havokPosition = reader.ReadInt32();
         var footerPosition = reader.ReadInt32();
         var havokDataSize = footerPosition - havokPosition;
+        if (havokDataSize <= 8) return null; // no havok data
+
         reader.BaseStream.Position = havokPosition;
         var havokData = reader.ReadBytes(havokDataSize);
-        if (havokData.Length <= 8) return null; // no havok data
 
         var output = new Dictionary<string, List<ushort>>(StringComparer.OrdinalIgnoreCase);
-        var tempHavokDataPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()) + ".hkx";
-        var tempHavokDataPathAnsi = Marshal.StringToHGlobalAnsi(tempHavokDataPath);
 
-        try
+        // Pin the havok data and load directly from memory (no temp file needed)
+        fixed (byte* havokDataPtr = havokData)
         {
-            File.WriteAllBytes(tempHavokDataPath, havokData);
-
-            var loadoptions = stackalloc hkSerializeUtil.LoadOptions[1];
-            loadoptions->TypeInfoRegistry = hkBuiltinTypeRegistry.Instance()->GetTypeInfoRegistry();
-            loadoptions->ClassNameRegistry = hkBuiltinTypeRegistry.Instance()->GetClassNameRegistry();
-            loadoptions->Flags = new hkFlags<hkSerializeUtil.LoadOptionBits, int>
+            try
             {
-                Storage = (int)(hkSerializeUtil.LoadOptionBits.Default)
-            };
-
-            var resource = hkSerializeUtil.LoadFromFile((byte*)tempHavokDataPathAnsi, null, loadoptions);
-            if (resource == null)
-            {
-                throw new InvalidOperationException("Resource was null after loading");
-            }
-
-            var rootLevelName = @"hkRootLevelContainer"u8;
-            fixed (byte* n1 = rootLevelName)
-            {
-                var container = (hkRootLevelContainer*)resource->GetContentsPointer(n1, hkBuiltinTypeRegistry.Instance()->GetTypeInfoRegistry());
-                var animationName = @"hkaAnimationContainer"u8;
-                fixed (byte* n2 = animationName)
+                var loadoptions = stackalloc hkSerializeUtil.LoadOptions[1];
+                loadoptions->TypeInfoRegistry = hkBuiltinTypeRegistry.Instance()->GetTypeInfoRegistry();
+                loadoptions->ClassNameRegistry = hkBuiltinTypeRegistry.Instance()->GetClassNameRegistry();
+                loadoptions->Flags = new hkFlags<hkSerializeUtil.LoadOptionBits, int>
                 {
-                    var animContainer = (hkaAnimationContainer*)container->findObjectByName(n2, null);
-                    for (int i = 0; i < animContainer->Bindings.Length; i++)
+                    Storage = (int)hkSerializeUtil.LoadOptionBits.Default
+                };
+
+                var resource = hkSerializeUtil.LoadFromBuffer(havokDataPtr, havokData.Length, null, loadoptions);
+                if (resource == null)
+                {
+                    _logger.LogWarning("Failed to load havok data from buffer for {hash}", hash);
+                    return null;
+                }
+
+                var rootLevelName = "hkRootLevelContainer"u8;
+                fixed (byte* n1 = rootLevelName)
+                {
+                    var container = (hkRootLevelContainer*)resource->GetContentsPointer(n1, hkBuiltinTypeRegistry.Instance()->GetTypeInfoRegistry());
+                    if (container == null)
                     {
-                        var binding = animContainer->Bindings[i].ptr;
-                        var boneTransform = binding->TransformTrackToBoneIndices;
-                        string name = binding->OriginalSkeletonName.String! + "_" + i;
-                        output[name] = [];
-                        for (int boneIdx = 0; boneIdx < boneTransform.Length; boneIdx++)
-                        {
-                            output[name].Add((ushort)boneTransform[boneIdx]);
-                        }
-                        output[name].Sort();
+                        _logger.LogWarning("Failed to get root container for {hash}", hash);
+                        return null;
                     }
 
+                    var animationName = "hkaAnimationContainer"u8;
+                    fixed (byte* n2 = animationName)
+                    {
+                        var animContainer = (hkaAnimationContainer*)container->findObjectByName(n2, null);
+                        if (animContainer == null)
+                        {
+                            _logger.LogWarning("Failed to get animation container for {hash}", hash);
+                            return null;
+                        }
+
+                        for (int i = 0; i < animContainer->Bindings.Length; i++)
+                        {
+                            var binding = animContainer->Bindings[i].ptr;
+                            if (binding == null) continue;
+
+                            var boneTransform = binding->TransformTrackToBoneIndices;
+                            string name = (binding->OriginalSkeletonName.String ?? "unknown") + "_" + i;
+
+                            // Pre-allocate list with known capacity
+                            var boneList = new List<ushort>(boneTransform.Length);
+                            for (int boneIdx = 0; boneIdx < boneTransform.Length; boneIdx++)
+                            {
+                                boneList.Add((ushort)boneTransform[boneIdx]);
+                            }
+                            boneList.Sort();
+                            output[name] = boneList;
+                        }
+                    }
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not load havok file in {path}", tempHavokDataPath);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(tempHavokDataPathAnsi);
-            File.Delete(tempHavokDataPath);
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not parse havok data for {hash}", hash);
+                return null;
+            }
         }
 
         _configService.Current.BonesDictionary[hash] = output;
@@ -241,6 +254,126 @@ public sealed class XivDataAnalyzer
     }
 
     /// <summary>
+    /// Precomputed bone validation context for efficient repeated checks.
+    /// </summary>
+    public sealed class BoneValidationContext
+    {
+        public Dictionary<string, HashSet<ushort>> CanonicalBuckets { get; }
+        public HashSet<ushort> CombinedBucket { get; }
+        public ushort MaxBoneIndex { get; }
+
+        public BoneValidationContext(Dictionary<string, List<ushort>> localBoneBuckets)
+        {
+            CanonicalBuckets = new Dictionary<string, HashSet<ushort>>(StringComparer.OrdinalIgnoreCase);
+            CombinedBucket = [];
+            MaxBoneIndex = 0;
+
+            foreach (var kvp in localBoneBuckets)
+            {
+                var canonicalKey = CanonicalizeSkeletonKey(kvp.Key);
+                if (!CanonicalBuckets.TryGetValue(canonicalKey, out var set))
+                {
+                    set = new HashSet<ushort>(kvp.Value.Count);
+                    CanonicalBuckets[canonicalKey] = set;
+                }
+
+                foreach (var idx in kvp.Value)
+                {
+                    set.Add(idx);
+                    CombinedBucket.Add(idx);
+                    if (idx > MaxBoneIndex) MaxBoneIndex = idx;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Creates a precomputed validation context for efficient repeated bone checks.
+    /// Call this once per character, then reuse for all PAP files.
+    /// </summary>
+    public BoneValidationContext CreateValidationContext(Dictionary<string, List<ushort>> localBoneBuckets)
+    {
+        return new BoneValidationContext(localBoneBuckets);
+    }
+
+    /// <summary>
+    /// Checks if a PAP file's bone indices are compatible with the local skeleton.
+    /// Uses precomputed context for efficiency when checking multiple files.
+    /// </summary>
+    public bool IsPapCompatible(
+        BoneValidationContext context,
+        Dictionary<string, List<ushort>> papBoneIndices,
+        AnimationValidationMode mode,
+        bool allowOneBasedShift,
+        bool allowNeighborTolerance,
+        out string reason)
+    {
+        reason = string.Empty;
+
+        if (mode == AnimationValidationMode.Unsafe)
+        {
+            return true;
+        }
+
+        // Check each PAP skeleton's bone indices
+        foreach (var papKvp in papBoneIndices)
+        {
+            var papBones = papKvp.Value;
+            if (papBones.Count == 0) continue;
+
+            var papCanonicalKey = CanonicalizeSkeletonKey(papKvp.Key);
+
+            // Find matching local bucket or use combined bucket as fallback
+            if (!context.CanonicalBuckets.TryGetValue(papCanonicalKey, out var targetBucket))
+            {
+                targetBucket = context.CombinedBucket;
+                _logger.LogTrace("No exact skeleton match for {papKey}, using combined bucket", papCanonicalKey);
+            }
+
+            if (targetBucket.Count == 0)
+            {
+                reason = $"No local bone data available for skeleton {papCanonicalKey}";
+                return false;
+            }
+
+            // Precompute max for this bucket (or use global max for combined)
+            var maxLocalBone = targetBucket == context.CombinedBucket
+                ? context.MaxBoneIndex
+                : targetBucket.Max();
+
+            // Determine if tolerance checks are needed
+            bool checkShiftTolerance = allowOneBasedShift && mode != AnimationValidationMode.Safest;
+            bool checkNeighborTolerance = allowNeighborTolerance && mode == AnimationValidationMode.Safe;
+            bool checkRangeFallback = mode == AnimationValidationMode.Safe;
+
+            foreach (var papBoneIdx in papBones)
+            {
+                // Fast path: direct match (most common case)
+                if (targetBucket.Contains(papBoneIdx))
+                    continue;
+
+                // Tolerance checks
+                if (checkShiftTolerance || checkNeighborTolerance)
+                {
+                    if (targetBucket.Contains((ushort)(papBoneIdx + 1)) ||
+                        (papBoneIdx > 0 && targetBucket.Contains((ushort)(papBoneIdx - 1))))
+                        continue;
+                }
+
+                // Range fallback for Safe mode
+                if (checkRangeFallback && papBoneIdx <= maxLocalBone)
+                    continue;
+
+                reason = $"PAP bone index {papBoneIdx} (skeleton: {papCanonicalKey}) not found in local skeleton (max: {maxLocalBone})";
+                _logger.LogDebug("Animation validation failed: {reason}", reason);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Checks if a PAP file's bone indices are compatible with the local skeleton.
     /// </summary>
     /// <param name="localBoneBuckets">Dictionary of canonical skeleton keys to their bone indices</param>
@@ -258,111 +391,7 @@ public sealed class XivDataAnalyzer
         bool allowNeighborTolerance,
         out string reason)
     {
-        reason = string.Empty;
-
-        if (mode == AnimationValidationMode.Unsafe)
-        {
-            return true; // No validation in unsafe mode
-        }
-
-        // Canonicalize local bone buckets
-        var canonicalLocalBuckets = new Dictionary<string, HashSet<ushort>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var kvp in localBoneBuckets)
-        {
-            var canonicalKey = CanonicalizeSkeletonKey(kvp.Key);
-            if (!canonicalLocalBuckets.TryGetValue(canonicalKey, out var set))
-            {
-                set = new HashSet<ushort>();
-                canonicalLocalBuckets[canonicalKey] = set;
-            }
-            foreach (var idx in kvp.Value)
-            {
-                set.Add(idx);
-            }
-        }
-
-        // Create a combined "any" bucket with all local bone indices for fallback matching
-        var anyBucket = new HashSet<ushort>();
-        foreach (var set in canonicalLocalBuckets.Values)
-        {
-            foreach (var idx in set)
-            {
-                anyBucket.Add(idx);
-            }
-        }
-
-        // Check each PAP skeleton's bone indices
-        foreach (var papKvp in papBoneIndices)
-        {
-            var papCanonicalKey = CanonicalizeSkeletonKey(papKvp.Key);
-            var papBones = papKvp.Value;
-
-            if (papBones.Count == 0) continue;
-
-            // Find matching local bucket or use "any" bucket as fallback
-            HashSet<ushort>? targetBucket = null;
-            if (canonicalLocalBuckets.TryGetValue(papCanonicalKey, out var matchedBucket))
-            {
-                targetBucket = matchedBucket;
-            }
-            else
-            {
-                // Use combined bucket as fallback
-                targetBucket = anyBucket;
-                _logger.LogTrace("No exact skeleton match for {papKey}, using combined bucket", papCanonicalKey);
-            }
-
-            if (targetBucket.Count == 0)
-            {
-                reason = $"No local bone data available for skeleton {papCanonicalKey}";
-                return false;
-            }
-
-            var maxLocalBone = targetBucket.Max();
-
-            foreach (var papBoneIdx in papBones)
-            {
-                bool isValid = false;
-
-                // Direct match
-                if (targetBucket.Contains(papBoneIdx))
-                {
-                    isValid = true;
-                }
-                // One-based shift tolerance (PAP might use 0-based while skeleton uses 1-based or vice versa)
-                else if (allowOneBasedShift && mode != AnimationValidationMode.Safest)
-                {
-                    if (targetBucket.Contains((ushort)(papBoneIdx + 1)) ||
-                        (papBoneIdx > 0 && targetBucket.Contains((ushort)(papBoneIdx - 1))))
-                    {
-                        isValid = true;
-                    }
-                }
-                // Neighbor tolerance (allows ±1 for edge cases)
-                else if (allowNeighborTolerance && mode == AnimationValidationMode.Safe)
-                {
-                    if (targetBucket.Contains((ushort)(papBoneIdx + 1)) ||
-                        (papBoneIdx > 0 && targetBucket.Contains((ushort)(papBoneIdx - 1))))
-                    {
-                        isValid = true;
-                    }
-                }
-
-                // In Safe mode, also allow if bone index is within the max range
-                if (!isValid && mode == AnimationValidationMode.Safe && papBoneIdx <= maxLocalBone)
-                {
-                    isValid = true;
-                }
-
-                if (!isValid)
-                {
-                    reason = $"PAP bone index {papBoneIdx} (skeleton: {papCanonicalKey}) not found in local skeleton (max: {maxLocalBone})";
-                    _logger.LogDebug("Animation validation failed: {reason}", reason);
-                    return false;
-                }
-            }
-        }
-
-        return true;
+        var context = CreateValidationContext(localBoneBuckets);
+        return IsPapCompatible(context, papBoneIndices, mode, allowOneBasedShift, allowNeighborTolerance, out reason);
     }
 }

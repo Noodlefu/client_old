@@ -273,12 +273,21 @@ public class PlayerDataFactory
     {
         if (boneIndices == null) return;
 
+        // Early exit: check if we have any bone data at all
+        bool hasAnyBones = false;
+        ushort maxBoneIndex = 0;
         foreach (var kvp in boneIndices)
         {
-            _logger.LogDebug("Found {skellyname} ({idx} bone indices) on player: {bones}", kvp.Key, kvp.Value.Any() ? kvp.Value.Max() : 0, string.Join(',', kvp.Value));
+            if (kvp.Value.Count > 0)
+            {
+                hasAnyBones = true;
+                var localMax = kvp.Value.Max();
+                if (localMax > maxBoneIndex) maxBoneIndex = localMax;
+            }
+            _logger.LogDebug("Found {skellyname} ({idx} bone indices) on player: {bones}", kvp.Key, kvp.Value.Count > 0 ? kvp.Value.Max() : 0, string.Join(',', kvp.Value));
         }
 
-        if (boneIndices.All(u => u.Value.Count == 0)) return;
+        if (!hasAnyBones) return;
 
         var validationMode = _syncConfigService.Current.AnimationValidationMode;
         var allowOneBasedShift = _syncConfigService.Current.AnimationAllowOneBasedShift;
@@ -291,36 +300,49 @@ public class PlayerDataFactory
             return;
         }
 
+        // Get PAP files once upfront
+        var papFiles = fragment.FileReplacements
+            .Where(f => !f.IsFileSwap && f.GamePaths.First().EndsWith("pap", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (papFiles.Count == 0) return;
+
+        _logger.LogDebug("Validating {count} PAP files against skeleton (mode: {mode})", papFiles.Count, validationMode);
+
+        // Create validation context once for all files
+        var validationContext = _modelAnalyzer.CreateValidationContext(boneIndices);
+
         int noValidationFailed = 0;
-        foreach (var file in fragment.FileReplacements.Where(f => !f.IsFileSwap && f.GamePaths.First().EndsWith("pap", StringComparison.OrdinalIgnoreCase)).ToList())
+        foreach (var file in papFiles)
         {
             ct.ThrowIfCancellationRequested();
 
             var skeletonIndices = await _dalamudUtil.RunOnFrameworkThread(() => _modelAnalyzer.GetBoneIndicesFromPap(file.Hash)).ConfigureAwait(false);
-            bool validationFailed = false;
-            string failReason = string.Empty;
+            if (skeletonIndices == null) continue;
 
-            if (skeletonIndices != null)
+            // Fast path: check if all indices are vanilla (≤105)
+            bool hasNonVanillaBones = false;
+            foreach (var kvp in skeletonIndices)
             {
-                // 105 is the maximum vanilla skeleton bone index
-                if (skeletonIndices.All(k => k.Value.Count == 0 || k.Value.Max() <= 105))
+                if (kvp.Value.Count > 0 && kvp.Value.Max() > 105)
                 {
-                    _logger.LogTrace("All indices of {path} are <= 105, ignoring", file.ResolvedPath);
-                    continue;
-                }
-
-                _logger.LogDebug("Verifying bone indices for {path}, found {x} skeletons (mode: {mode})", file.ResolvedPath, skeletonIndices.Count, validationMode);
-
-                // Use the new IsPapCompatible method
-                if (!_modelAnalyzer.IsPapCompatible(boneIndices, skeletonIndices, validationMode, allowOneBasedShift, allowNeighborTolerance, out failReason))
-                {
-                    _logger.LogWarning("Animation validation failed for {path}: {reason}", file.ResolvedPath, failReason);
-                    validationFailed = true;
+                    hasNonVanillaBones = true;
+                    break;
                 }
             }
 
-            if (validationFailed)
+            if (!hasNonVanillaBones)
             {
+                _logger.LogTrace("All indices of {path} are <= 105, ignoring", file.ResolvedPath);
+                continue;
+            }
+
+            _logger.LogDebug("Verifying bone indices for {path}, found {x} skeletons", file.ResolvedPath, skeletonIndices.Count);
+
+            // Use precomputed context for validation
+            if (!_modelAnalyzer.IsPapCompatible(validationContext, skeletonIndices, validationMode, allowOneBasedShift, allowNeighborTolerance, out var failReason))
+            {
+                _logger.LogWarning("Animation validation failed for {path}: {reason}", file.ResolvedPath, failReason);
                 noValidationFailed++;
                 _logger.LogDebug("Removing {file} from sent file replacements and transient data", file.ResolvedPath);
                 fragment.FileReplacements.Remove(file);
@@ -329,7 +351,6 @@ public class PlayerDataFactory
                     _transientResourceManager.RemoveTransientResource(ObjectKind.Player, gamePath);
                 }
             }
-
         }
 
         if (noValidationFailed > 0)
