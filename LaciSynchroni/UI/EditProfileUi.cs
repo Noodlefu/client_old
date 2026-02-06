@@ -14,6 +14,7 @@ using LaciSynchroni.UI.Components;
 using LaciSynchroni.WebAPI;
 using Microsoft.Extensions.Logging;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats;
 using SixLabors.ImageSharp.PixelFormats;
 
 namespace LaciSynchroni.UI;
@@ -46,10 +47,10 @@ public class EditProfileUi : WindowMediatorSubscriberBase
         : base(logger, mediator, "Laci Synchroni Edit Profile###LaciSynchroniEditProfileUI", performanceCollectorService)
     {
         IsOpen = false;
-        this.SizeConstraints = new()
+        SizeConstraints = new()
         {
             MinimumSize = new(windowWidth, 512),
-            MaximumSize = new(windowWidth, 2000)
+            MaximumSize = new(windowWidth, 2000),
         };
         _apiController = apiController;
         _uiSharedService = uiSharedService;
@@ -164,9 +165,13 @@ public class EditProfileUi : WindowMediatorSubscriberBase
                 if (!success) return;
                 _ = Task.Run(async () =>
                 {
-                    var fileContent = File.ReadAllBytes(file);
-                    using MemoryStream ms = new(fileContent);
-                    var format = await Image.DetectFormatAsync(ms).ConfigureAwait(false);
+                    var fileContent = await File.ReadAllBytesAsync(file).ConfigureAwait(false);
+                    var ms = new MemoryStream(fileContent);
+                    IImageFormat format;
+                    await using (ms.ConfigureAwait(false))
+                    {
+                        format = await Image.DetectFormatAsync(ms).ConfigureAwait(false);
+                    }
                     if (!format.FileExtensions.Contains("png", StringComparer.OrdinalIgnoreCase))
                     {
                         _showFileDialogError = true;

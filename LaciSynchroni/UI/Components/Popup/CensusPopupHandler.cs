@@ -5,16 +5,10 @@ using System.Numerics;
 
 namespace LaciSynchroni.UI.Components.Popup;
 
-public class CensusPopupHandler : IPopupHandler
+public class CensusPopupHandler(ServerConfigurationManager serverConfigurationManager, UiSharedService uiSharedService) : IPopupHandler
 {
-    private readonly ServerConfigurationManager _serverConfigurationManager;
-    private readonly UiSharedService _uiSharedService;
-
-    public CensusPopupHandler(ServerConfigurationManager serverConfigurationManager, UiSharedService uiSharedService)
-    {
-        _serverConfigurationManager = serverConfigurationManager;
-        _uiSharedService = uiSharedService;
-    }
+    private readonly ServerConfigurationManager _serverConfigurationManager = serverConfigurationManager;
+    private readonly UiSharedService _uiSharedService = uiSharedService;
 
     private Vector2 _size = new(600, 450);
     public Vector2 PopupSize => _size;

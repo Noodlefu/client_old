@@ -10,7 +10,7 @@ namespace LaciSynchroni.WebAPI.Files
         private readonly Stream _baseStream;
         private long _bandwidthLimit;
         private Bandwidth? _bandwidth;
-        private CancellationTokenSource _bandwidthChangeTokenSource = new CancellationTokenSource();
+        private CancellationTokenSource _bandwidthChangeTokenSource = new();
 
         /// <summary>
         ///     Initializes a new instance of the <see cref="T:ThrottledStream" /> class.
@@ -98,7 +98,14 @@ namespace LaciSynchroni.WebAPI.Files
             CancellationToken cancellationToken)
         {
             await Throttle(count, cancellationToken).ConfigureAwait(false);
-            return await _baseStream.ReadAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+            return await _baseStream.ReadAsync(buffer.AsMemory(offset, count), cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Throttle(buffer.Length, cancellationToken).ConfigureAwait(false);
+            return await _baseStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
         }
 
         /// <inheritdoc />
@@ -112,7 +119,14 @@ namespace LaciSynchroni.WebAPI.Files
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
             await Throttle(count, cancellationToken).ConfigureAwait(false);
-            await _baseStream.WriteAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false);
+            await _baseStream.WriteAsync(buffer.AsMemory(offset, count), cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Throttle(buffer.Length, cancellationToken).ConfigureAwait(false);
+            await _baseStream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
         }
 
         public override void Close()

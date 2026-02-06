@@ -225,7 +225,6 @@ public partial class SyncHubClient
 
     public Task Client_GposeLobbyPushWorldData(UserData userData, WorldData worldData)
     {
-        //Logger.LogDebug("Client_GposeLobbyPushWorldData: {dto}", userData);
         ExecuteSafely(() => Mediator.Publish(new GPoseLobbyReceiveWorldData(userData, worldData)));
         return Task.CompletedTask;
     }
@@ -296,10 +295,10 @@ public partial class SyncHubClient
         _connection!.On(nameof(Client_UpdateSystemInfo), act);
     }
 
-    public void OnUpdateUserIndividualPairStatusDto(Action<UserIndividualPairStatusDto> action)
+    public void OnUpdateUserIndividualPairStatusDto(Action<UserIndividualPairStatusDto> act)
     {
         if (_initialized) return;
-        _connection!.On(nameof(Client_UpdateUserIndividualPairStatusDto), action);
+        _connection!.On(nameof(Client_UpdateUserIndividualPairStatusDto), act);
     }
 
     public void OnUserAddClientPair(Action<UserPairDto> act)

@@ -17,6 +17,8 @@ namespace LaciSynchroni.UI;
 /// </summary>
 public partial class SettingsUi
 {
+    private static readonly JsonSerializerOptions _indentedJsonOptions = new() { WriteIndented = true };
+
     private void DrawDebug()
     {
         _lastTab = "Debug";
@@ -25,7 +27,7 @@ public partial class SettingsUi
 #if DEBUG
         if (LastCreatedCharacterData != null && ImGui.TreeNode("Last created character data"))
         {
-            foreach (var l in JsonSerializer.Serialize(LastCreatedCharacterData, new JsonSerializerOptions() { WriteIndented = true }).Split('\n'))
+            foreach (var l in JsonSerializer.Serialize(LastCreatedCharacterData, _indentedJsonOptions).Split('\n'))
             {
                 ImGui.TextUnformatted($"{l}");
             }
@@ -37,7 +39,7 @@ public partial class SettingsUi
         {
             if (LastCreatedCharacterData != null)
             {
-                ImGui.SetClipboardText(JsonSerializer.Serialize(LastCreatedCharacterData, new JsonSerializerOptions() { WriteIndented = true }));
+                ImGui.SetClipboardText(JsonSerializer.Serialize(LastCreatedCharacterData, _indentedJsonOptions));
             }
             else
             {
@@ -230,22 +232,24 @@ public partial class SettingsUi
             {
                 if (_uiShared.IconTextButton(FontAwesomeIcon.FileArchive, "Compact all files in storage"))
                 {
+                    var token = _validationCts?.Token ?? CancellationToken.None;
                     _ = Task.Run(() =>
                     {
                         _fileCompactor.CompactStorage(compress: true);
-                        _cacheMonitor.RecalculateFileCacheSize(CancellationToken.None);
-                    });
+                        _cacheMonitor.RecalculateFileCacheSize(token);
+                    }, token);
                 }
                 UiSharedService.AttachToolTip($"This will run compression on all files in your current {_dalamudUtilService.GetPluginName()} storage." + Environment.NewLine
                     + "You do not need to run this manually if you keep the file compactor enabled.");
                 ImGui.SameLine();
                 if (_uiShared.IconTextButton(FontAwesomeIcon.File, "Decompact all files in storage"))
                 {
+                    var token = _validationCts?.Token ?? CancellationToken.None;
                     _ = Task.Run(() =>
                     {
                         _fileCompactor.CompactStorage(compress: false);
-                        _cacheMonitor.RecalculateFileCacheSize(CancellationToken.None);
-                    });
+                        _cacheMonitor.RecalculateFileCacheSize(token);
+                    }, token);
                 }
                 UiSharedService.AttachToolTip($"This will run decompression on all files in your current {_dalamudUtilService.GetPluginName()} storage.");
             }
@@ -316,13 +320,17 @@ public partial class SettingsUi
         {
             if (_uiShared.IconTextButton(FontAwesomeIcon.Trash, "Clear local storage") && UiSharedService.CtrlPressed() && _readClearCache)
             {
+                var clearToken = _validationCts?.Token ?? CancellationToken.None;
                 _ = Task.Run(() =>
                 {
-                    foreach (var file in Directory.GetFiles(_configService.Current.CacheFolder))
+                    var cacheFolder = _configService.Current.CacheFolder;
+                    if (Directory.Exists(cacheFolder))
                     {
-                        File.Delete(file);
+                        Directory.Delete(cacheFolder, true);
+                        Directory.CreateDirectory(cacheFolder);
                     }
-                });
+                    _fileCacheManager.ClearAll();
+                }, clearToken);
             }
             UiSharedService.AttachToolTip("You normally do not need to do this. THIS IS NOT SOMETHING YOU SHOULD BE DOING TO TRY TO FIX SYNC ISSUES." + Environment.NewLine
                 + "This will solely remove all downloaded data from all players and will require you to re-download everything again." + Environment.NewLine
@@ -372,7 +380,7 @@ public partial class SettingsUi
         UiSharedService.AttachToolTip(lockData.CharName);
 
         ImGui.TableNextColumn();
-        ImGui.TextUnformatted(lockData.PlayerHash.Substring(0, 15));
+        ImGui.TextUnformatted(lockData.PlayerHash[..15]);
 
         ImGui.TableNextColumn();
         ImGui.TextUnformatted(_serverConfigurationManager.GetServerNameByIndex(lockData.Index));

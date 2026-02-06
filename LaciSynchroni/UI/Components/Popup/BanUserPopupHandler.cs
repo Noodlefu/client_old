@@ -8,19 +8,13 @@ using System.Numerics;
 
 namespace LaciSynchroni.UI.Components.Popup;
 
-public class BanUserPopupHandler : IPopupHandler
+public class BanUserPopupHandler(ApiController apiController, UiSharedService uiSharedService) : IPopupHandler
 {
-    private readonly ApiController _apiController;
-    private readonly UiSharedService _uiSharedService;
+    private readonly ApiController _apiController = apiController;
+    private readonly UiSharedService _uiSharedService = uiSharedService;
     private string _banReason = string.Empty;
     private GroupFullInfoDto _group = null!;
     private Pair _reportedPair = null!;
-
-    public BanUserPopupHandler(ApiController apiController, UiSharedService uiSharedService)
-    {
-        _apiController = apiController;
-        _uiSharedService = uiSharedService;
-    }
 
     public Vector2 PopupSize => new(500, 250);
 

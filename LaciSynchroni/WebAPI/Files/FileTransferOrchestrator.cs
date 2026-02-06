@@ -49,7 +49,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         Mediator.Subscribe<ConnectedMessage>(this, (msg) =>
         {
             var newUri = msg.Connection.ServerInfo.FileServerAddress;
-            _cdnUris.AddOrUpdate(msg.ServerIndex, i => newUri, (i, uri) => newUri);
+            _cdnUris.AddOrUpdate(msg.ServerIndex, static (_, arg) => arg, static (_, _, arg) => arg, newUri);
         });
 
         Mediator.Subscribe<DisconnectedMessage>(this, (msg) =>
@@ -69,7 +69,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
     /// <summary>Maximum number of forbidden transfer entries to keep.</summary>
     private const int ForbiddenTransferMaxCount = 1000;
 
-    public List<FileTransfer> ForbiddenTransfers => _forbiddenTransfers.Values.Select(v => v.Transfer).ToList();
+    public List<FileTransfer> GetForbiddenTransfers() => [.. _forbiddenTransfers.Values.Select(v => v.Transfer)];
 
     public bool IsForbidden(string hash) => _forbiddenTransfers.ContainsKey(hash);
 
@@ -256,10 +256,10 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
             {
                 _downloadSemaphore.Release(additionalSlots);
             }
-            catch (SemaphoreFullException)
+            catch (SemaphoreFullException ex)
             {
                 // This shouldn't happen but handle it gracefully
-                Logger.LogWarning("SemaphoreFullException when trying to increase capacity");
+                Logger.LogWarning(ex, "SemaphoreFullException when trying to increase capacity");
             }
             _availableDownloadSlots = newCapacity;
         }
@@ -273,7 +273,6 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
 
             // Swap the semaphore - existing waiters on old semaphore will still get their slots
             // as they complete, but new waiters will use the new semaphore
-            var oldSemaphore = _downloadSemaphore;
             _downloadSemaphore = newSemaphore;
             _availableDownloadSlots = newCapacity;
 
@@ -322,7 +321,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
 
         if (requestMessage.Content != null && requestMessage.Content is not StreamContent && requestMessage.Content is not ByteArrayContent)
         {
-            var content = await ((JsonContent)requestMessage.Content).ReadAsStringAsync().ConfigureAwait(false);
+            var content = await ((JsonContent)requestMessage.Content).ReadAsStringAsync(ct ?? CancellationToken.None).ConfigureAwait(false);
             Logger.LogDebug("Sending {Method} to {Uri} (Content: {Content})", requestMessage.Method, requestMessage.RequestUri, content);
         }
         else
@@ -336,13 +335,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         {
             try
             {
-                if (ct != null)
-                    return await _httpClient.SendAsync(requestMessage, httpCompletionOption, ct.Value).ConfigureAwait(false);
-                return await _httpClient.SendAsync(requestMessage, httpCompletionOption).ConfigureAwait(false);
-            }
-            catch (TaskCanceledException)
-            {
-                throw;
+                return await _httpClient.SendAsync(requestMessage, httpCompletionOption, ct ?? CancellationToken.None).ConfigureAwait(false);
             }
             catch (HttpRequestException ex) when (IsTransientError(ex) && attempt < MaxTransientRetries)
             {
@@ -350,16 +343,9 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
                 Logger.LogWarning(ex, "Transient error during SendRequestInternal for {Uri}, retrying ({Attempt}/{MaxRetries})",
                     requestMessage.RequestUri, attempt + 1, MaxTransientRetries);
 
-                try
-                {
-                    await Task.Delay(TransientRetryDelayMs, ct ?? CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (TaskCanceledException)
-                {
-                    throw;
-                }
+                await Task.Delay(TransientRetryDelayMs, ct ?? CancellationToken.None).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not TaskCanceledException)
             {
                 Logger.LogWarning(ex, "Error during SendRequestInternal for {Uri}", requestMessage.RequestUri);
                 throw;

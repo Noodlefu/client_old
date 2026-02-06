@@ -33,7 +33,7 @@ public class PermissionWindowUI : WindowMediatorSubscriberBase
         SizeConstraints = new()
         {
             MinimumSize = new(450, 100),
-            MaximumSize = new(450, 500)
+            MaximumSize = new(450, 500),
         };
         IsOpen = true;
     }
@@ -139,7 +139,7 @@ public class PermissionWindowUI : WindowMediatorSubscriberBase
                 _ = _apiController.SetBulkPermissions(Pair.ServerIndex, new(
                     new(StringComparer.Ordinal)
                     {
-                        { Pair.UserData.UID, _ownPermissions }
+                        { Pair.UserData.UID, _ownPermissions },
                     },
                     new(StringComparer.Ordinal)
                 ));
@@ -171,7 +171,7 @@ public class PermissionWindowUI : WindowMediatorSubscriberBase
             _ = _apiController.SetBulkPermissions(Pair.ServerIndex, new(
                 new(StringComparer.Ordinal)
                 {
-                    { Pair.UserData.UID, _ownPermissions }
+                    { Pair.UserData.UID, _ownPermissions },
                 },
                 new(StringComparer.Ordinal)
             ));

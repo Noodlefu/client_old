@@ -7,7 +7,7 @@ namespace LaciSynchroni.WebAPI;
 
 public partial class SyncHubClient : IServerHub
 {
-  public async Task GroupBanUser(GroupPairDto dto, string reason)
+    public async Task GroupBanUser(GroupPairDto dto, string reason)
     {
         CheckConnection();
         await _connection!.SendAsync(nameof(GroupBanUser), dto, reason).ConfigureAwait(false);
@@ -24,7 +24,7 @@ public partial class SyncHubClient : IServerHub
         CheckConnection();
         await SetBulkPermissions(new(new(StringComparer.Ordinal),
             new(StringComparer.Ordinal) {
-                { dto.Group.GID, dto.GroupPairPermissions }
+                { dto.Group.GID, dto.GroupPairPermissions },
             })).ConfigureAwait(false);
     }
 

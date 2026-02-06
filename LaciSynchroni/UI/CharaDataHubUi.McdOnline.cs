@@ -6,6 +6,8 @@ using Dalamud.Interface.Utility.Raii;
 using LaciSynchroni.Common.Dto.CharaData;
 using LaciSynchroni.Services.CharaData.Models;
 using System.Numerics;
+using System.Linq;
+
 
 namespace LaciSynchroni.UI;
 
@@ -148,13 +150,13 @@ internal sealed partial class CharaDataHubUi
         var dtoShareType = updateDto.ShareType;
         if (ImGui.BeginCombo("Sharing", GetShareTypeString(dtoShareType)))
         {
-            foreach (var shareType in Enum.GetValues(typeof(ShareTypeDto)).Cast<ShareTypeDto>())
+            foreach (var shareType in from shareType in Enum.GetValues<ShareTypeDto>()
+                                      where ImGui.Selectable(GetShareTypeString(shareType), shareType == dtoShareType)
+                                      select shareType)
             {
-                if (ImGui.Selectable(GetShareTypeString(shareType), shareType == dtoShareType))
-                {
-                    updateDto.ShareType = shareType;
-                }
+                updateDto.ShareType = shareType;
             }
+
 
             ImGui.EndCombo();
         }
@@ -169,13 +171,13 @@ internal sealed partial class CharaDataHubUi
         var dtoAccessType = updateDto.AccessType;
         if (ImGui.BeginCombo("Access Restrictions", GetAccessTypeString(dtoAccessType)))
         {
-            foreach (var accessType in Enum.GetValues(typeof(AccessTypeDto)).Cast<AccessTypeDto>())
+            foreach (var accessType in from accessType in Enum.GetValues<AccessTypeDto>()
+                                       where ImGui.Selectable(GetAccessTypeString(accessType), accessType == dtoAccessType)
+                                       select accessType)
             {
-                if (ImGui.Selectable(GetAccessTypeString(accessType), accessType == dtoAccessType))
-                {
-                    updateDto.AccessType = accessType;
-                }
+                updateDto.AccessType = accessType;
             }
+
 
             ImGui.EndCombo();
         }
@@ -220,7 +222,7 @@ internal sealed partial class CharaDataHubUi
         _uiSharedService.BooleanToColoredIcon(hasGlamourerdata, false);
 
         ImGui.TextUnformatted("Contains Files");
-        var hasFiles = (updateDto.FileGamePaths ?? []).Any() || (dataDto.OriginalFiles.Any());
+        var hasFiles = (updateDto.FileGamePaths ?? []).Count != 0 || dataDto.OriginalFiles.Count != 0;
         UiSharedService.ScaledSameLine(200);
         _uiSharedService.BooleanToColoredIcon(hasFiles, false);
         if (hasFiles && updateDto.IsAppearanceEqual)
@@ -439,7 +441,7 @@ internal sealed partial class CharaDataHubUi
         foreach (var pose in updateDto.PoseList)
         {
             ImGui.AlignTextToFramePadding();
-            using var id = ImRaii.PushId("pose" + poseNumber);
+            using var id = ImRaii.PushId($"pose{poseNumber}");
             ImGui.TextUnformatted(poseNumber.ToString());
 
             if (pose.Id == null)
@@ -488,7 +490,7 @@ internal sealed partial class CharaDataHubUi
 
                 using (ImRaii.Disabled(!_uiSharedService.IsInGpose || !(_charaDataManager.AttachingPoseTask?.IsCompleted ?? true) || !_charaDataManager.BrioAvailable))
                 {
-                    using var poseid = ImRaii.PushId("poseSet" + poseNumber);
+                    using var poseid = ImRaii.PushId($"poseSet{poseNumber}");
                     if (_uiSharedService.IconButton(FontAwesomeIcon.Plus))
                     {
                         _charaDataManager.AttachPoseData(pose, updateDto);
@@ -498,7 +500,7 @@ internal sealed partial class CharaDataHubUi
                 ImGui.SameLine();
                 using (ImRaii.Disabled(!hasPoseData))
                 {
-                    using var poseid = ImRaii.PushId("poseDelete" + poseNumber);
+                    using var poseid = ImRaii.PushId($"poseDelete{poseNumber}");
                     if (_uiSharedService.IconButton(FontAwesomeIcon.Trash))
                     {
                         pose.PoseData = string.Empty;
@@ -527,7 +529,7 @@ internal sealed partial class CharaDataHubUi
                 ImGui.SameLine();
                 using (ImRaii.Disabled(!_uiSharedService.IsInGpose || !(_charaDataManager.AttachingPoseTask?.IsCompleted ?? true) || !_charaDataManager.BrioAvailable))
                 {
-                    using var worldId = ImRaii.PushId("worldSet" + poseNumber);
+                    using var worldId = ImRaii.PushId($"worldSet{poseNumber}");
                     if (_uiSharedService.IconButton(FontAwesomeIcon.Plus))
                     {
                         _charaDataManager.AttachWorldData(pose, updateDto);
@@ -537,7 +539,7 @@ internal sealed partial class CharaDataHubUi
                 ImGui.SameLine();
                 using (ImRaii.Disabled(!hasWorldData))
                 {
-                    using var worldId = ImRaii.PushId("worldDelete" + poseNumber);
+                    using var worldId = ImRaii.PushId($"worldDelete{poseNumber}");
                     if (_uiSharedService.IconButton(FontAwesomeIcon.Trash))
                     {
                         pose.WorldData = default(WorldData);
@@ -562,7 +564,7 @@ internal sealed partial class CharaDataHubUi
 
     private void DrawMcdOnline()
     {
-        if (_apiController.ConnectedServerIndexes.Any())
+        if (_apiController.ConnectedServerIndexes.Length != 0)
         {
             var serverName = _apiController.GetServerNameByIndex(_selectedServerIndex);
             _uiSharedService.BigText($"{serverName} Character Data Online");
@@ -577,7 +579,7 @@ internal sealed partial class CharaDataHubUi
             + "There would be a bit too much to explain here on what you can do here in its entirety, however, all elements in this tab have help texts attached what they are used for. Please review them carefully." + Environment.NewLine + Environment.NewLine
             + "Be mindful that when you share your Character Data with other people there is a chance that, with the help of unsanctioned 3rd party plugins, your appearance could be stolen irreversibly, just like when using MCDF.");
 
-        if (!_apiController.ConnectedServerIndexes.Any())
+        if (_apiController.ConnectedServerIndexes.Length == 0)
         {
             ImGuiHelpers.ScaledDummy(5);
             UiSharedService.DrawGroupedCenteredColorText("No server is currently connected, please connect to a server to use Character Data Online.", ImGuiColors.DalamudYellow);
@@ -978,7 +980,7 @@ internal sealed partial class CharaDataHubUi
                 ImGui.Separator();
                 ImGuiHelpers.ScaledDummy(5);
             }
-        }, drawOpen: (updateDto.AccessType == AccessTypeDto.Individuals));
+        }, drawOpen: updateDto.AccessType == AccessTypeDto.Individuals);
     }
 
     private void InputComboHybrid<T>(string inputId, string comboId, ref string value, IEnumerable<T> comboEntries,
@@ -998,13 +1000,12 @@ internal sealed partial class CharaDataHubUi
         if (_openComboHybridEntries is null || !string.Equals(_openComboHybridId, comboId, StringComparison.Ordinal))
         {
             var valueSnapshot = value;
-            _openComboHybridEntries = comboEntries
+            _openComboHybridEntries = [.. comboEntries
                 .Select(parseEntry)
                 .Where(entry => entry.Id.Contains(valueSnapshot, StringComparison.OrdinalIgnoreCase)
                     || (entry.Alias is not null && entry.Alias.Contains(valueSnapshot, StringComparison.OrdinalIgnoreCase))
                     || (entry.Note is not null && entry.Note.Contains(valueSnapshot, StringComparison.OrdinalIgnoreCase)))
-                .OrderBy(entry => entry.Note is null ? entry.AliasOrId : $"{entry.Note} ({entry.AliasOrId})", StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+                .OrderBy(entry => entry.Note is null ? entry.AliasOrId : $"{entry.Note} ({entry.AliasOrId})", StringComparer.OrdinalIgnoreCase),];
             _openComboHybridId = comboId;
         }
         _comboHybridUsedLastFrame = true;

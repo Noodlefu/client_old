@@ -13,16 +13,12 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace LaciSynchroni.WebAPI.SignalR.SyncHubOverrides;
-internal class SyncHubClientPS : SyncHubClient
-{
-    public SyncHubClientPS(int serverIndex,
-        ServerConfigurationManager serverConfigurationManager, PairManager pairManager,
-        DalamudUtilService dalamudUtilService,
-        ILoggerFactory loggerFactory, ILoggerProvider loggerProvider, SyncMediator mediator, MultiConnectTokenService multiConnectTokenService, SyncConfigService syncConfigService, HttpClient httpClient) :
-        base(serverIndex, serverConfigurationManager, pairManager, dalamudUtilService, loggerFactory, loggerProvider, mediator, multiConnectTokenService, syncConfigService, httpClient)
-    {
 
-    }
+internal class SyncHubClientPS(int serverIndex,
+    ServerConfigurationManager serverConfigurationManager, PairManager pairManager,
+    DalamudUtilService dalamudUtilService,
+    ILoggerFactory loggerFactory, ILoggerProvider loggerProvider, SyncMediator mediator, MultiConnectTokenService multiConnectTokenService, SyncConfigService syncConfigService, HttpClient httpClient) : SyncHubClient(serverIndex, serverConfigurationManager, pairManager, dalamudUtilService, loggerFactory, loggerProvider, mediator, multiConnectTokenService, syncConfigService, httpClient)
+{
 
     public override async Task UserAddPair(UserDto user)
     {

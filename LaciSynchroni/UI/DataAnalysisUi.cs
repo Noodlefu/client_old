@@ -10,7 +10,6 @@ using LaciSynchroni.Services;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.Utils;
-using Lumina.Data.Files;
 using Microsoft.Extensions.Logging;
 using System.Numerics;
 
@@ -70,13 +69,13 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
             MinimumSize = new()
             {
                 X = 800,
-                Y = 600
+                Y = 600,
             },
             MaximumSize = new()
             {
                 X = 3840,
-                Y = 2160
-            }
+                Y = 2160,
+            },
         };
 
         _conversionProgress.ProgressChanged += ConversionProgress_ProgressChanged;
@@ -89,7 +88,7 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
             _showModal = true;
             if (ImGui.BeginPopupModal("BC7 Conversion in Progress"))
             {
-                ImGui.TextUnformatted("BC7 Conversion in progress: " + _conversionCurrentFileProgress + "/" + _texturesToConvert.Count);
+                ImGui.TextUnformatted($"BC7 Conversion in progress: {_conversionCurrentFileProgress}/{_texturesToConvert.Count}");
                 UiSharedService.TextWrapped("Current file: " + _conversionCurrentFileName);
                 if (_uiSharedService.IconTextButton(FontAwesomeIcon.StopCircle, "Cancel conversion"))
                 {
@@ -184,16 +183,16 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
             availableContentRegion = ImGui.GetContentRegionAvail();
             using (ImRaii.ListBox("##characters", new Vector2(200, availableContentRegion.Y)))
             {
-                foreach (var entry in config)
+                foreach (var key in config.Keys)
                 {
-                    var name = entry.Key.Split("_");
+                    var name = key.Split("_");
                     if (!_uiSharedService.WorldData.TryGetValue(ushort.Parse(name[1]), out var worldname))
                     {
                         continue;
                     }
-                    if (ImGui.Selectable(name[0] + " (" + worldname + ")", string.Equals(_selectedStoredCharacter, entry.Key, StringComparison.Ordinal)))
+                    if (ImGui.Selectable(name[0] + " (" + worldname + ")", string.Equals(_selectedStoredCharacter, key, StringComparison.Ordinal)))
                     {
-                        _selectedStoredCharacter = entry.Key;
+                        _selectedStoredCharacter = key;
                         _selectedJobEntry = string.Empty;
                         _storedPathsToRemove.Clear();
                         _filePathResolve.Clear();
@@ -218,12 +217,12 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
                     {
                         _selectedJobEntry = "alljobs";
                     }
-                    foreach (var job in transientStorage!.JobSpecificCache)
+                    foreach (var jobKey in transientStorage!.JobSpecificCache.Keys)
                     {
-                        if (!_uiSharedService.JobData.TryGetValue(job.Key, out var jobName)) continue;
-                        if (ImGui.Selectable(jobName, string.Equals(_selectedJobEntry, job.Key.ToString(), StringComparison.Ordinal)))
+                        if (!_uiSharedService.JobData.TryGetValue(jobKey, out var jobName)) continue;
+                        if (ImGui.Selectable(jobName, string.Equals(_selectedJobEntry, jobKey.ToString(), StringComparison.Ordinal)))
                         {
-                            _selectedJobEntry = job.Key.ToString();
+                            _selectedJobEntry = jobKey.ToString();
                             _storedPathsToRemove.Clear();
                             _filePathResolve.Clear();
                             _filterFilePath = string.Empty;
@@ -236,9 +235,10 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
         ImGui.SameLine();
         using (ImRaii.Group())
         {
+            var jobSpecificList = string.IsNullOrEmpty(_selectedJobEntry) ? [] : config[_selectedStoredCharacter].JobSpecificCache[uint.Parse(_selectedJobEntry)];
             var selectedList = string.Equals(_selectedJobEntry, "alljobs", StringComparison.Ordinal)
                 ? config[_selectedStoredCharacter].GlobalPersistentCache
-                : (string.IsNullOrEmpty(_selectedJobEntry) ? [] : config[_selectedStoredCharacter].JobSpecificCache[uint.Parse(_selectedJobEntry)]);
+                : jobSpecificList;
             ImGui.TextUnformatted($"Attached Files (Total Files: {selectedList.Count})");
             ImGui.Separator();
             ImGuiHelpers.ScaledDummy(3);
@@ -252,19 +252,19 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
                     _ = Task.Run(async () =>
                     {
                         var paths = selectedList.ToArray();
-                        var resolved = await _ipcManager.Penumbra.ResolvePathsAsync(paths, []).ConfigureAwait(false);
+                        var (forward, _) = await _ipcManager.Penumbra.ResolvePathsAsync(paths, []).ConfigureAwait(false);
                         _filePathResolve.Clear();
 
-                        for (int i = 0; i < resolved.forward.Length; i++)
+                        for (int i = 0; i < forward.Length; i++)
                         {
-                            _filePathResolve[paths[i]] = resolved.forward[i];
+                            _filePathResolve[paths[i]] = forward[i];
                         }
-                    });
+                    }, _transientRecordCts.Token);
                 }
                 ImGui.SameLine();
                 ImGuiHelpers.ScaledDummy(20, 1);
                 ImGui.SameLine();
-                using (ImRaii.Disabled(!_storedPathsToRemove.Any()))
+                using (ImRaii.Disabled(_storedPathsToRemove.Count == 0))
                 {
                     if (_uiSharedService.IconTextButton(FontAwesomeIcon.Trash, "Remove selected Game Paths"))
                     {
@@ -302,59 +302,58 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
                 ImGui.SetNextItemWidth((restContent - 30) / 2f);
                 ImGui.InputTextWithHint("##filterFilePath", "Filter by File Path", ref _filterFilePath, 255);
 
-                using (var dataTable = ImRaii.Table("##table", 3, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.ScrollY | ImGuiTableFlags.RowBg))
+                using var dataTable = ImRaii.Table("##table", 3, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.ScrollY | ImGuiTableFlags.RowBg);
+                if (dataTable)
                 {
-                    if (dataTable)
+                    ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 30);
+                    ImGui.TableSetupColumn("Game Path", ImGuiTableColumnFlags.WidthFixed, (restContent - 30) / 2f);
+                    ImGui.TableSetupColumn("File Path", ImGuiTableColumnFlags.WidthFixed, (restContent - 30) / 2f);
+                    ImGui.TableSetupScrollFreeze(0, 1);
+                    ImGui.TableHeadersRow();
+                    int id = 0;
+                    foreach (var entry in selectedList)
                     {
-                        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 30);
-                        ImGui.TableSetupColumn("Game Path", ImGuiTableColumnFlags.WidthFixed, (restContent - 30) / 2f);
-                        ImGui.TableSetupColumn("File Path", ImGuiTableColumnFlags.WidthFixed, (restContent - 30) / 2f);
-                        ImGui.TableSetupScrollFreeze(0, 1);
-                        ImGui.TableHeadersRow();
-                        int id = 0;
-                        foreach (var entry in selectedList)
+                        if (!string.IsNullOrWhiteSpace(_filterGamePath) && !entry.Contains(_filterGamePath, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        bool hasFileResolve = _filePathResolve.TryGetValue(entry, out var filePath);
+
+                        if (hasFileResolve && !string.IsNullOrEmpty(_filterFilePath) && !filePath!.Contains(_filterFilePath, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        using var imguiid = ImRaii.PushId(id++);
+                        ImGui.TableNextColumn();
+                        bool isSelected = _storedPathsToRemove.Contains(entry, StringComparer.Ordinal);
+                        if (ImGui.Checkbox("##", ref isSelected))
                         {
-                            if (!string.IsNullOrWhiteSpace(_filterGamePath) && !entry.Contains(_filterGamePath, StringComparison.OrdinalIgnoreCase))
-                                continue;
-                            bool hasFileResolve = _filePathResolve.TryGetValue(entry, out var filePath);
-
-                            if (hasFileResolve && !string.IsNullOrEmpty(_filterFilePath) && !filePath!.Contains(_filterFilePath, StringComparison.OrdinalIgnoreCase))
-                                continue;
-
-                            using var imguiid = ImRaii.PushId(id++);
-                            ImGui.TableNextColumn();
-                            bool isSelected = _storedPathsToRemove.Contains(entry, StringComparer.Ordinal);
-                            if (ImGui.Checkbox("##", ref isSelected))
-                            {
-                                if (isSelected)
-                                    _storedPathsToRemove.Add(entry);
-                                else
-                                    _storedPathsToRemove.Remove(entry);
-                            }
-                            ImGui.TableNextColumn();
-                            ImGui.TextUnformatted(entry);
-                            UiSharedService.AttachToolTip(entry + UiSharedService.TooltipSeparator + "Click to copy to clipboard");
+                            if (isSelected)
+                                _storedPathsToRemove.Add(entry);
+                            else
+                                _storedPathsToRemove.Remove(entry);
+                        }
+                        ImGui.TableNextColumn();
+                        ImGui.TextUnformatted(entry);
+                        UiSharedService.AttachToolTip(entry + UiSharedService.TooltipSeparator + "Click to copy to clipboard");
+                        if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+                        {
+                            ImGui.SetClipboardText(entry);
+                        }
+                        ImGui.TableNextColumn();
+                        if (hasFileResolve)
+                        {
+                            ImGui.TextUnformatted(filePath ?? "Unk");
+                            UiSharedService.AttachToolTip(filePath ?? "Unk" + UiSharedService.TooltipSeparator + "Click to copy to clipboard");
                             if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
                             {
-                                ImGui.SetClipboardText(entry);
-                            }
-                            ImGui.TableNextColumn();
-                            if (hasFileResolve)
-                            {
-                                ImGui.TextUnformatted(filePath ?? "Unk");
-                                UiSharedService.AttachToolTip(filePath ?? "Unk" + UiSharedService.TooltipSeparator + "Click to copy to clipboard");
-                                if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
-                                {
-                                    ImGui.SetClipboardText(filePath);
-                                }
-                            }
-                            else
-                            {
-                                ImGui.TextUnformatted("-");
-                                UiSharedService.AttachToolTip("Resolve Game Paths to used File Paths to display the associated file paths.");
+                                ImGui.SetClipboardText(filePath);
                             }
                         }
+                        else
+                        {
+                            ImGui.TextUnformatted("-");
+                            UiSharedService.AttachToolTip("Resolve Game Paths to used File Paths to display the associated file paths.");
+                        }
                     }
+
                 }
             }
         }
@@ -526,8 +525,7 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
             string text = "";
             var groupedfiles = _cachedAnalysis.Values.SelectMany(f => f.Values).GroupBy(f => f.FileType, StringComparer.Ordinal);
             text = string.Join(Environment.NewLine, groupedfiles.OrderBy(f => f.Key, StringComparer.Ordinal)
-                .Select(f => f.Key + ": " + f.Count() + " files, size: " + UiSharedService.ByteToString(f.Sum(v => v.OriginalSize))
-                + ", compressed: " + UiSharedService.ByteToString(f.Sum(v => v.CompressedSize))));
+                .Select(f => $"{f.Key}: {f.Count()} files, size: {UiSharedService.ByteToString(f.Sum(v => v.OriginalSize))}, compressed: {UiSharedService.ByteToString(f.Sum(v => v.CompressedSize))}"));
             ImGui.SetTooltip(text);
         }
         ImGui.TextUnformatted("Total size (actual):");
@@ -563,8 +561,7 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
                 {
                     string text = "";
                     text = string.Join(Environment.NewLine, groupedfiles
-                        .Select(f => f.Key + ": " + f.Count() + " files, size: " + UiSharedService.ByteToString(f.Sum(v => v.OriginalSize))
-                        + ", compressed: " + UiSharedService.ByteToString(f.Sum(v => v.CompressedSize))));
+                        .Select(f => $"{f.Key}: {f.Count()} files, size: {UiSharedService.ByteToString(f.Sum(v => v.OriginalSize))}, compressed: {UiSharedService.ByteToString(f.Sum(v => v.CompressedSize))}"));
                     ImGui.SetTooltip(text);
                 }
                 ImGui.TextUnformatted($"{kvp.Key} size (actual):");
@@ -634,7 +631,7 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
 
                 foreach (IGrouping<string, CharacterAnalyzer.FileDataEntry>? fileGroup in groupedfiles)
                 {
-                    string fileGroupText = fileGroup.Key + " [" + fileGroup.Count() + "]";
+                    string fileGroupText = $"{fileGroup.Key} [{fileGroup.Count()}]";
                     var requiresCompute = fileGroup.Any(k => !k.IsComputed);
                     using var tabcol = ImRaii.PushColor(ImGuiCol.Tab, UiSharedService.Color(ImGuiColors.DalamudYellow), requiresCompute);
                     if (requiresCompute)
@@ -704,7 +701,7 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
                                 }
 
                                 ImGui.SameLine();
-                                if (filesToConvert.Count > 0 && _uiSharedService.IconTextButton(FontAwesomeIcon.PlayCircle, "Start conversion of " + filesToConvert.Count + " texture(s)"))
+                                if (filesToConvert.Count > 0 && _uiSharedService.IconTextButton(FontAwesomeIcon.PlayCircle, $"Start conversion of {filesToConvert.Count} texture(s)"))
                                 {
                                     _texturesToConvert = filesToConvert.ToDictionary(p => p.FilePaths[0], p => p.FilePaths.ToArray(), StringComparer.Ordinal);
                                     _conversionCancellationTokenSource = _conversionCancellationTokenSource.CancelRecreate();
@@ -780,9 +777,12 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
 
     private void DrawTable(IGrouping<string, CharacterAnalyzer.FileDataEntry> fileGroup)
     {
-        var tableColumns = string.Equals(fileGroup.Key, "tex", StringComparison.Ordinal)
-            ? (_enableBc7ConversionMode ? 7 : 6)
-            : (string.Equals(fileGroup.Key, "mdl", StringComparison.Ordinal) ? 6 : 5);
+        var tableColumns = fileGroup.Key switch
+        {
+            "tex" => _enableBc7ConversionMode ? 7 : 6,
+            "mdl" => 6,
+            _ => 5,
+        };
         using var table = ImRaii.Table("Analysis", tableColumns, ImGuiTableFlags.Sortable | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.SizingFixedFit,
             new Vector2(0, 300));
         if (!table.Success) return;
@@ -857,7 +857,7 @@ public class DataAnalysisUi : WindowMediatorSubscriberBase
             }
             ImGui.TextUnformatted(item.Hash);
             if (ImGui.IsItemClicked()) _selectedHash = item.Hash;
-            if(item.FilePaths.Count > 0)
+            if (item.FilePaths.Count > 0)
                 UiSharedService.AttachToolTip(item.FilePaths[0]);
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(item.FilePaths.Count.ToString());

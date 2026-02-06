@@ -1,3 +1,4 @@
+using System.Globalization;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility;
@@ -39,7 +40,7 @@ public class CreateSyncshellUI : WindowMediatorSubscriberBase
         SizeConstraints = new()
         {
             MinimumSize = new(550, 350),
-            MaximumSize = new(550, 350)
+            MaximumSize = new(550, 350),
         };
 
         Flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse;
@@ -67,9 +68,9 @@ public class CreateSyncshellUI : WindowMediatorSubscriberBase
             var maxGroupsCreateable = _apiController.GetMaxGroupsCreatedByUser(_serverIndexForCreation);
             var currentUserUid = _apiController.GetUidByServer(_serverIndexForCreation);
             using (ImRaii.Disabled(_pairManager.GroupPairs.Select(k => k.Key).Distinct()
-                                       .Count(g => string.Equals(g.GroupFullInfo.OwnerUID, currentUserUid,
-                                           StringComparison.Ordinal)) >=
-                                   maxGroupsCreateable))
+                                       .Where(g => string.Equals(g.GroupFullInfo.OwnerUID, currentUserUid,
+                                           StringComparison.Ordinal))
+                                       .Skip(maxGroupsCreateable - 1).Any()))
             {
                 if (_createGroupTask != null && !_createGroupTask.IsCompleted)
                 {
@@ -102,10 +103,10 @@ public class CreateSyncshellUI : WindowMediatorSubscriberBase
         {
             var defaultPermissions = _apiController.GetDefaultPermissionsForServer(_serverIndexForCreation);
             var serverInfo = _apiController.GetServerInfoForServer(_serverIndexForCreation);
-            UiSharedService.TextWrapped("Creating a new Syncshell will create it with your current preferred permissions for Syncshells as default suggested permissions." + Environment.NewLine +
-                "- You can own up to " + serverInfo?.MaxGroupsCreatedByUser + " Syncshells on this server." + Environment.NewLine +
-                "- You can join up to " + serverInfo?.MaxGroupsJoinedByUser + " Syncshells on this server (including your own)" + Environment.NewLine +
-                "- Syncshells on this server can have a maximum of " + serverInfo?.MaxGroupUserCount + " users");
+            UiSharedService.TextWrapped($"Creating a new Syncshell will create it with your current preferred permissions for Syncshells as default suggested permissions.{Environment.NewLine}" +
+                $"- You can own up to {serverInfo?.MaxGroupsCreatedByUser} Syncshells on this server.{Environment.NewLine}" +
+                $"- You can join up to {serverInfo?.MaxGroupsJoinedByUser} Syncshells on this server (including your own){Environment.NewLine}" +
+                $"- Syncshells on this server can have a maximum of {serverInfo?.MaxGroupUserCount} users");
             ImGuiHelpers.ScaledDummy(2f);
             ImGui.TextUnformatted("Your current Syncshell preferred permissions are:");
             ImGui.AlignTextToFramePadding();

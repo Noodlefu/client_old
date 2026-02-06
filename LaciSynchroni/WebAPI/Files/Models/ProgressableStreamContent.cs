@@ -18,15 +18,8 @@ public class ProgressableStreamContent : StreamContent
     public ProgressableStreamContent(Stream streamToWrite, int bufferSize, IProgress<UploadProgress>? progress)
         : base(streamToWrite, bufferSize)
     {
-        if (streamToWrite == null)
-        {
-            throw new ArgumentNullException(nameof(streamToWrite));
-        }
-
-        if (bufferSize <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(bufferSize));
-        }
+        ArgumentNullException.ThrowIfNull(streamToWrite);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bufferSize);
 
         _streamToWrite = streamToWrite;
         _bufferSize = bufferSize;

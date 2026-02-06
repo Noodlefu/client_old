@@ -1,4 +1,4 @@
-﻿using Dalamud.Bindings.ImGui;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
@@ -115,13 +115,13 @@ public class SyncshellAdminUI : WindowMediatorSubscriberBase
                     ImGui.SameLine();
                     using (ImRaii.Disabled(_multiInvites <= 1 || _multiInvites > 100))
                     {
-                        if (_uiSharedService.IconTextButton(FontAwesomeIcon.Envelope, "Generate " + _multiInvites + " one-time invites"))
+                        if (_uiSharedService.IconTextButton(FontAwesomeIcon.Envelope, $"Generate {_multiInvites} one-time invites"))
                         {
                             _oneTimeInvites.AddRange(_apiController.GroupCreateTempInvite(_serverIndex, new(GroupFullInfo.Group), _multiInvites).Result);
                         }
                     }
 
-                    if (_oneTimeInvites.Any())
+                    if (_oneTimeInvites.Count != 0)
                     {
                         var invites = string.Join(Environment.NewLine, _oneTimeInvites);
                         ImGui.InputTextMultiline("Generated Multi Invites", ref invites, 5000, new(0, 0), ImGuiInputTextFlags.ReadOnly);
@@ -226,7 +226,7 @@ public class SyncshellAdminUI : WindowMediatorSubscriberBase
                                         ImGui.SameLine(0, 2f);
                                     }
 
-                                    if (_isOwner || (pair.Value == null || (pair.Value != null && !pair.Value.Value.IsModerator())))
+                                    if (_isOwner || pair.Value == null || (pair.Value != null && !pair.Value.Value.IsModerator()))
                                     {
                                         using (ImRaii.Disabled(isPairSyncshellOwner))
                                         {
@@ -263,7 +263,7 @@ public class SyncshellAdminUI : WindowMediatorSubscriberBase
                                         UiSharedService.AttachToolTip("Ban user from Syncshell"
                                             + UiSharedService.TooltipSeparator + "Hold CTRL to enable this button");
                                     }
-                                    if (_isOwner && (pair.Value != null && pair.Value.Value.IsModerator() && !isPairSyncshellOwner))
+                                    if (_isOwner && pair.Value != null && pair.Value.Value.IsModerator() && !isPairSyncshellOwner)
                                     {
                                         ImGui.SameLine(0, 2f);
                                         using (ImRaii.Disabled(isPairSyncshellOwner || !UiSharedService.CtrlPressed() || !UiSharedService.ShiftPressed()))
@@ -313,7 +313,7 @@ public class SyncshellAdminUI : WindowMediatorSubscriberBase
                             + UiSharedService.TooltipSeparator + "Note: this check excludes pinned users and moderators of this Syncshell.");
                         ImGui.SameLine();
                         ImGui.SetNextItemWidth(150);
-                        _uiSharedService.DrawCombo("Days of inactivity", [7, 14, 30, 90], count => count + " days",
+                        _uiSharedService.DrawCombo("Days of inactivity", [7, 14, 30, 90], count => $"{count} days",
                         selected =>
                         {
                             _pruneDays = selected;

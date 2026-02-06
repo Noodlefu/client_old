@@ -12,27 +12,16 @@ using System.Collections.Immutable;
 
 namespace LaciSynchroni.UI.Components;
 
-public class DrawFolderGroup : DrawFolderBase
+public class DrawFolderGroup(int serverIndex, GroupFullInfoDto groupFullInfoDto, ApiController apiController,
+    IImmutableList<DrawUserPair> drawPairs, IImmutableList<Pair> allPairs, TagHandler tagHandler, IdDisplayHandler idDisplayHandler,
+    SyncMediator syncMediator, UiSharedService uiSharedService) : DrawFolderBase(drawPairs, allPairs, uiSharedService)
 {
-    private readonly ApiController _apiController;
-    private readonly GroupFullInfoDto _groupFullInfoDto;
-    private readonly IdDisplayHandler _idDisplayHandler;
-    private readonly SyncMediator _syncMediator;
-    private readonly TagHandler _tagHandler;
-    private readonly int _serverIndex;
-
-    public DrawFolderGroup(int serverIndex, GroupFullInfoDto groupFullInfoDto, ApiController apiController,
-        IImmutableList<DrawUserPair> drawPairs, IImmutableList<Pair> allPairs, TagHandler tagHandler, IdDisplayHandler idDisplayHandler,
-        SyncMediator syncMediator, UiSharedService uiSharedService) :
-        base(drawPairs, allPairs, uiSharedService)
-    {
-        _groupFullInfoDto = groupFullInfoDto;
-        _apiController = apiController;
-        _idDisplayHandler = idDisplayHandler;
-        _syncMediator = syncMediator;
-        _tagHandler = tagHandler;
-        _serverIndex = serverIndex;
-    }
+    private readonly ApiController _apiController = apiController;
+    private readonly GroupFullInfoDto _groupFullInfoDto = groupFullInfoDto;
+    private readonly IdDisplayHandler _idDisplayHandler = idDisplayHandler;
+    private readonly SyncMediator _syncMediator = syncMediator;
+    private readonly TagHandler _tagHandler = tagHandler;
+    private readonly int _serverIndex = serverIndex;
 
     protected override bool RenderIfEmpty => true;
     protected override bool RenderMenu => true;
@@ -52,15 +41,7 @@ public class DrawFolderGroup : DrawFolderBase
             UiSharedService.AttachToolTip("Syncshell " + _groupFullInfoDto.GroupAliasOrGID + " is closed for invites");
         }
 
-        //using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, ImGui.GetStyle().ItemSpacing with { X = ImGui.GetStyle().ItemSpacing.X / 2f }))
-        //{
-        //    ImGui.SameLine();
-        //    ImGui.AlignTextToFramePadding();
-
-        //    ImGui.TextUnformatted("[" + OnlinePairs.ToString() + "]");
-        //}
-
-        var syncshellTooltipText = OnlinePairs + " online" + Environment.NewLine + TotalPairs + " total";
+        var syncshellTooltipText = $"{OnlinePairs} online{Environment.NewLine}{TotalPairs} total";
         if (_serverIndex >= 0)
         {
             syncshellTooltipText = _apiController.GetServerNameByIndex(_serverIndex) +
@@ -110,7 +91,7 @@ public class DrawFolderGroup : DrawFolderBase
         if (_uiSharedService.IconTextButton(FontAwesomeIcon.StickyNote, "Copy Notes", menuWidth, true))
         {
             ImGui.CloseCurrentPopup();
-            ImGui.SetClipboardText(UiSharedService.GetNotes(DrawPairs.Select(k => k.Pair).ToList()));
+            ImGui.SetClipboardText(UiSharedService.GetNotes([.. DrawPairs.Select(k => k.Pair)]));
         }
         UiSharedService.AttachToolTip("Copies all your notes for all users in this Syncshell to the clipboard." + Environment.NewLine + "They can be imported via Settings -> General -> Notes -> Import notes from clipboard");
 

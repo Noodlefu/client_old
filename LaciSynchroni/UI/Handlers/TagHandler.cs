@@ -3,7 +3,7 @@ using LaciSynchroni.SyncConfiguration.Models;
 
 namespace LaciSynchroni.UI.Handlers;
 
-public class TagHandler
+public class TagHandler(ServerConfigurationManager serverConfigurationManager)
 {
     public const string CustomAllTag = "Laci_All";
     public const string CustomOfflineTag = "Laci_Offline";
@@ -11,12 +11,7 @@ public class TagHandler
     public const string CustomOnlineTag = "Laci_Online";
     public const string CustomUnpairedTag = "Laci_Unpaired";
     public const string CustomVisibleTag = "Laci_Visible";
-    private readonly ServerConfigurationManager _serverConfigurationManager;
-
-    public TagHandler(ServerConfigurationManager serverConfigurationManager)
-    {
-        _serverConfigurationManager = serverConfigurationManager;
-    }
+    private readonly ServerConfigurationManager _serverConfigurationManager = serverConfigurationManager;
 
     public void AddTag(int serverIndex, string tag)
     {
@@ -30,22 +25,17 @@ public class TagHandler
 
     public List<TagWithServerIndex> GetAllTagsSorted()
     {
-        return _serverConfigurationManager.GetServerInfo()
+        return [.. _serverConfigurationManager.GetServerInfo()
             .SelectMany((_, index) =>
             {
                 var tags = _serverConfigurationManager.GetServerAvailablePairTags(index);
                 return tags.Select(tag => new TagWithServerIndex(index, tag));
             })
-            .OrderBy(t => t.Tag, StringComparer.Ordinal)
-            .ToList();
+            .OrderBy(t => t.Tag, StringComparer.Ordinal),];
     }
 
-    public List<string> GetAllTagsForServerSorted(int serverIndex)
-    {
-        return _serverConfigurationManager.GetServerAvailablePairTags(serverIndex)
-            .OrderBy(s => s, StringComparer.Ordinal)
-            .ToList();
-    }
+    public List<string> GetAllTagsForServerSorted(int serverIndex) =>
+        [.. _serverConfigurationManager.GetServerAvailablePairTags(serverIndex).Order(StringComparer.Ordinal)];
 
     public HashSet<string> GetOtherUidsForTag(int serverIndex, string tag)
     {

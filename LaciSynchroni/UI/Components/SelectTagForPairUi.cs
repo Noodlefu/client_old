@@ -9,36 +9,27 @@ using System.Numerics;
 
 namespace LaciSynchroni.UI.Components;
 
-public class SelectTagForPairUi
+public class SelectTagForPairUi(TagHandler tagHandler, IdDisplayHandler uidDisplayHandler, UiSharedService uiSharedService)
 {
-    private readonly TagHandler _tagHandler;
-    private readonly IdDisplayHandler _uidDisplayHandler;
-    private readonly UiSharedService _uiSharedService;
+    private readonly TagHandler _tagHandler = tagHandler;
+    private readonly IdDisplayHandler _uidDisplayHandler = uidDisplayHandler;
+    private readonly UiSharedService _uiSharedService = uiSharedService;
 
     /// <summary>
     /// The group UI is always open for a specific pair. This defines which pair the UI is open for.
     /// </summary>
     /// <returns></returns>
-    private Pair? _pair;
+    private Pair? _pair = null;
 
     /// <summary>
     /// Should the panel show, yes/no
     /// </summary>
-    private bool _show;
+    private bool _show = false;
 
     /// <summary>
     /// For the add category option, this stores the currently typed in tag name
     /// </summary>
     private string _tagNameToAdd = "";
-
-    public SelectTagForPairUi(TagHandler tagHandler, IdDisplayHandler uidDisplayHandler, UiSharedService uiSharedService)
-    {
-        _show = false;
-        _pair = null;
-        _tagHandler = tagHandler;
-        _uidDisplayHandler = uidDisplayHandler;
-        _uiSharedService = uiSharedService;
-    }
 
     public void Draw()
     {

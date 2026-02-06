@@ -14,41 +14,24 @@ using System.Collections.Immutable;
 
 namespace LaciSynchroni.UI;
 
-public class DrawEntityFactory
+public class DrawEntityFactory(ApiController apiController, IdDisplayHandler uidDisplayHandler,
+    SelectTagForPairUi selectTagForPairUi, SyncMediator mediator,
+    TagHandler tagHandler, SelectPairForTagUi selectPairForTagUi,
+    ServerConfigurationManager serverConfigurationManager, UiSharedService uiSharedService,
+    PlayerPerformanceConfigService playerPerformanceConfigService, CharaDataManager charaDataManager,
+    SyncConfigService configService)
 {
-    private readonly ILogger<DrawEntityFactory> _logger;
-    private readonly ApiController _apiController;
-    private readonly SyncMediator _mediator;
-    private readonly SelectPairForTagUi _selectPairForTagUi;
-    private readonly ServerConfigurationManager _serverConfigurationManager;
-    private readonly UiSharedService _uiSharedService;
-    private readonly PlayerPerformanceConfigService _playerPerformanceConfigService;
-    private readonly CharaDataManager _charaDataManager;
-    private readonly SelectTagForPairUi _selectTagForPairUi;
-    private readonly TagHandler _tagHandler;
-    private readonly IdDisplayHandler _uidDisplayHandler;
-    private readonly SyncConfigService _configService;
-
-    public DrawEntityFactory(ILogger<DrawEntityFactory> logger, ApiController apiController, IdDisplayHandler uidDisplayHandler,
-        SelectTagForPairUi selectTagForPairUi, SyncMediator mediator,
-        TagHandler tagHandler, SelectPairForTagUi selectPairForTagUi,
-        ServerConfigurationManager serverConfigurationManager, UiSharedService uiSharedService,
-        PlayerPerformanceConfigService playerPerformanceConfigService, CharaDataManager charaDataManager,
-        SyncConfigService configService)
-    {
-        _logger = logger;
-        _apiController = apiController;
-        _uidDisplayHandler = uidDisplayHandler;
-        _selectTagForPairUi = selectTagForPairUi;
-        _mediator = mediator;
-        _tagHandler = tagHandler;
-        _selectPairForTagUi = selectPairForTagUi;
-        _serverConfigurationManager = serverConfigurationManager;
-        _uiSharedService = uiSharedService;
-        _playerPerformanceConfigService = playerPerformanceConfigService;
-        _charaDataManager = charaDataManager;
-        _configService = configService;
-    }
+    private readonly ApiController _apiController = apiController;
+    private readonly SyncMediator _mediator = mediator;
+    private readonly SelectPairForTagUi _selectPairForTagUi = selectPairForTagUi;
+    private readonly ServerConfigurationManager _serverConfigurationManager = serverConfigurationManager;
+    private readonly UiSharedService _uiSharedService = uiSharedService;
+    private readonly PlayerPerformanceConfigService _playerPerformanceConfigService = playerPerformanceConfigService;
+    private readonly CharaDataManager _charaDataManager = charaDataManager;
+    private readonly SelectTagForPairUi _selectTagForPairUi = selectTagForPairUi;
+    private readonly TagHandler _tagHandler = tagHandler;
+    private readonly IdDisplayHandler _uidDisplayHandler = uidDisplayHandler;
+    private readonly SyncConfigService _configService = configService;
 
     public DrawFolderGroup CreateDrawGroupFolder(GroupFullInfoWithServer groupFullInfoDto,
         Dictionary<Pair, List<GroupFullInfoDto>> filteredPairs,

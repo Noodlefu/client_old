@@ -63,7 +63,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
         SizeConstraints = new()
         {
             MinimumSize = new(600, 500),
-            MaximumSize = new(800, 700)
+            MaximumSize = new(800, 700),
         };
 
         Flags = ImGuiWindowFlags.NoCollapse;
@@ -96,7 +96,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
 
         var uri = new Uri(_pendingServer.ServerUri);
 
-        _serverInfoTask = Task.Run(async () => await _httpClient.GetAsync(new UriBuilder(uri.Scheme.Equals("wss") ? Uri.UriSchemeHttps : Uri.UriSchemeHttp, uri!.Host, uri.Port == -1 ? 443 : uri.Port, "/clientconfiguration/get").Uri).ConfigureAwait(false), _authCts.Token);
+        _serverInfoTask = Task.Run(async () => await _httpClient.GetAsync(new UriBuilder(uri.Scheme.Equals("wss") ? Uri.UriSchemeHttps : Uri.UriSchemeHttp, uri!.Host, uri.Port == -1 ? 443 : uri.Port, "/clientconfiguration/get").Uri, _authCts.Token).ConfigureAwait(false), _authCts.Token);
     }
 
     public override void OnOpen()
@@ -164,7 +164,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
                 ImGuiColors.HealerGreen);
             if (!_hasReceivedServerInfo)
             {
-                var config = JsonSerializer.Deserialize<ConfigurationDto>(_serverInfoResponse.Content.ReadAsStream());
+                var config = JsonSerializer.Deserialize<ConfigurationDto>(_serverInfoResponse.Content.ReadAsStream(_authCts.Token));
                 _pendingServer.ServerName = config?.ServerName ?? string.Empty;
                 _pendingServer.UseOAuth2 = config?.IsOAuthEnabled ?? true;
                 _pendingServer.ServerHubUri = config?.HubUri?.ToString() ?? "";
@@ -310,7 +310,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
         }
     }
 
-    private void DrawServerLabel(string label, string value)
+    private static void DrawServerLabel(string label, string value)
     {
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(label);
@@ -321,7 +321,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
         }
     }
 
-    private bool DrawServerCheckbox(string label, bool value)
+    private static bool DrawServerCheckbox(string label, bool value)
     {
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(label);
@@ -330,7 +330,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
         return value;
     }
 
-    private string DrawServerTextbox(string label, string value, int maxLength = 512, ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
+    private static string DrawServerTextbox(string label, string value, int maxLength = 512, ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
     {
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(label);
@@ -465,7 +465,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
                     WorldId = currentWorldId,
                     LastSeenCID = currentCid,
                     UID = firstUid.Key,
-                    SecretKeyIdx = -1
+                    SecretKeyIdx = -1,
                 });
                 _serverConfigurationManager.Save();
 
@@ -497,7 +497,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
             if (_uiSharedService.IconTextButton(FontAwesomeIcon.Check, "Finish & Connect"))
             {
                 // Initiate connection to the newly added server
-                _ = Task.Run(async () => await _uiSharedService.ApiController.CreateConnectionsAsync(_addedServerIndex), _authCts.Token);
+                _ = Task.Run(async () => await _uiSharedService.ApiController.CreateConnectionsAsync(_addedServerIndex).ConfigureAwait(false), _authCts.Token);
 
                 Mediator.Publish(new NotificationMessage(
                     "Connecting",
@@ -519,5 +519,12 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
                 IsOpen = false;
             }
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        _authCts.Dispose();
+        _serverInfoResponse?.Dispose();
     }
 }

@@ -90,7 +90,7 @@ public sealed class ServerHubTokenProvider : IDisposable, IMediatorSubscriber
                     using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, tokenUri.ToString());
                     request.Content = new FormUrlEncodedContent([
                         new KeyValuePair<string, string>("uid", identifier.UID),
-                        new KeyValuePair<string, string>("charaIdent", identifier.CharaHash)
+                        new KeyValuePair<string, string>("charaIdent", identifier.CharaHash),
                     ]);
                     request.Headers.Authorization =
                         new AuthenticationHeaderValue("Bearer", identifier.SecretKeyOrOAuth);
@@ -111,7 +111,7 @@ public sealed class ServerHubTokenProvider : IDisposable, IMediatorSubscriber
                 result = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
             }
 
-            response = await result.Content.ReadAsStringAsync().ConfigureAwait(false);
+            response = await result.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             result.EnsureSuccessStatusCode();
             _tokenCache[identifier] = response;
         }
@@ -146,7 +146,7 @@ public sealed class ServerHubTokenProvider : IDisposable, IMediatorSubscriber
         var handler = new JwtSecurityTokenHandler();
         var jwtToken = handler.ReadJwtToken(response);
         _logger.LogTrace("GetNewToken: JWT {token}", response);
-        _logger.LogDebug("GetNewToken: Valid until {date}, ValidClaim until {date}", jwtToken.ValidTo,
+        _logger.LogDebug("GetNewToken: Valid until {ValidTo}, ValidClaim until {ExpirationDate}", jwtToken.ValidTo,
             new DateTime(
                 long.Parse(jwtToken.Claims
                     .Single(c => string.Equals(c.Type, "expiration_date", StringComparison.Ordinal)).Value),

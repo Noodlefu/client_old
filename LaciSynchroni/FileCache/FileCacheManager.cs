@@ -124,6 +124,16 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
         return CreateFileCacheEntity(fi, prefixedPath);
     }
 
+    public void ClearAll()
+    {
+        lock (_fileCachesLock)
+        {
+            _fileCaches.Clear();
+        }
+        _validationCache.Clear();
+        _logger.LogInformation("Cleared all file caches");
+    }
+
     public List<FileCacheEntity> GetAllFileCaches()
     {
         lock (_fileCachesLock)
@@ -173,9 +183,10 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
         var totalCount = cacheEntries.Count;
 
         // Use parallel processing for hash validation (I/O and CPU bound)
+        // Limit to half the cores to avoid saturating CPU and disk
         var parallelOptions = new ParallelOptions
         {
-            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
+            MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount / 2, 1, 4),
             CancellationToken = cancellationToken,
         };
 
@@ -196,7 +207,6 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
 
                 try
                 {
-                    // Run hash computation on thread pool to avoid blocking
                     var computedHash = await Task.Run(() => Crypto.GetFileHash(fileCache.ResolvedFilepath), ct).ConfigureAwait(false);
                     if (!string.Equals(computedHash, fileCache.Hash, StringComparison.Ordinal))
                     {
@@ -213,6 +223,12 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
                 {
                     _logger.LogWarning(e, "Error during validation of {File}", fileCache.ResolvedFilepath);
                     brokenEntities.Add(fileCache);
+                }
+
+                // Yield periodically to reduce pressure on CPU and disk
+                if (currentProgress % 50 == 0)
+                {
+                    await Task.Delay(10, ct).ConfigureAwait(false);
                 }
             }).ConfigureAwait(false);
         }

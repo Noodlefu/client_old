@@ -178,11 +178,11 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
             {
                 await TryConnect(hubUri).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
                 // cancellation token was triggered, either through user input or an error
                 // if this is the case, we just log it and leave. Connection wasn't established set, nothing to erase
-                _logger.LogWarning("Connection attempt cancelled");
+                _logger.LogWarning(ex, "Connection attempt cancelled");
                 return;
             }
             catch (HttpRequestException ex)
@@ -586,9 +586,6 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
 
     public async Task DisposeAsync()
     {
-        // Important to dispose all subscriptions first, just in case some random event fires that triggers a reconnect or something
-        // Make sure to call the override. If you don't, you end up looping between Dispose and DisposeAsync.
-        base.Dispose(true);
         _healthCheckTokenSource?.Cancel();
         // Important to call StopConnectionAsync here because we want the proper message publishing of the disconnect message.
         await StopConnectionAsync(ServerState.Disconnected).ConfigureAwait(false);
@@ -597,7 +594,11 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
 
     protected override void Dispose(bool disposing)
     {
-        _ = Task.Run(async () => await DisposeAsync().ConfigureAwait(false));
+        if (disposing)
+        {
+            _ = Task.Run(async () => await DisposeAsync().ConfigureAwait(false));
+        }
+        base.Dispose(disposing);
     }
 
     public async Task<bool> CheckClientHealth()
@@ -607,8 +608,8 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
 
     public async Task DalamudUtilOnLogIn()
     {
-        var charaName = _dalamudUtil.GetPlayerNameAsync().GetAwaiter().GetResult();
-        var worldId = _dalamudUtil.GetHomeWorldIdAsync().GetAwaiter().GetResult();
+        var charaName = await _dalamudUtil.GetPlayerNameAsync().ConfigureAwait(false);
+        var worldId = await _dalamudUtil.GetHomeWorldIdAsync().ConfigureAwait(false);
         var auth = ServerToUse.Authentications.Find(f =>
             string.Equals(f.CharacterName, charaName, StringComparison.Ordinal) && f.WorldId == worldId);
         if (auth?.AutoLogin ?? false)
@@ -646,7 +647,7 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
 
             perm.SetPaused(paused: false);
             await UserSetPairPermissions(new UserPermissionsDto(userData, perm)).ConfigureAwait(false);
-        }, cts.Token).ContinueWith((t) => cts.Dispose());
+        }, cts.Token).ContinueWith((t) => cts.Dispose(), CancellationToken.None);
 
         return Task.CompletedTask;
     }

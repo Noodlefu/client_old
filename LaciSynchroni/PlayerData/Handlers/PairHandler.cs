@@ -475,7 +475,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
                 toDownloadReplacements = TryCalculateModdedDictionary(applicationBase, charaData, out moddedPaths, downloadToken);
 
-                if (toDownloadReplacements.TrueForAll(c => _transferOrchestrator.ForbiddenTransfers.Exists(f => string.Equals(f.Hash, c.Hash, StringComparison.Ordinal))))
+                if (toDownloadReplacements.TrueForAll(c => _transferOrchestrator.GetForbiddenTransfers().Exists(f => string.Equals(f.Hash, c.Hash, StringComparison.Ordinal))))
                 {
                     break;
                 }
@@ -543,8 +543,13 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             if (updateModdedPaths)
             {
                 // ensure collection is set
-                var objIndex = await _dalamudUtil.RunOnFrameworkThread(() => _charaHandler!.GetGameObject()!.ObjectIndex).ConfigureAwait(false);
-                await _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, objIndex).ConfigureAwait(false);
+                var gameObject = await _dalamudUtil.RunOnFrameworkThread(() => _charaHandler!.GetGameObject()).ConfigureAwait(false);
+                if (gameObject == null)
+                {
+                    Logger.LogWarning("[{applicationId}] Game object is null for {handler}, skipping modded paths", _applicationId, this);
+                    return;
+                }
+                await _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, gameObject.ObjectIndex).ConfigureAwait(false);
 
                 await _ipcManager.Penumbra.SetTemporaryModsAsync(Logger, _applicationId, _penumbraCollection,
                     moddedPaths.ToDictionary(k => k.Key.GamePath, k => k.Value, StringComparer.Ordinal)).ConfigureAwait(false);
@@ -670,9 +675,10 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         // Only the render-lock owner should assign the temp collection to avoid a non-owner overwriting
         // an already-populated collection with an empty one (which would render the target vanilla).
         var lockOwner = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
-        if (lockOwner == Pair.ServerIndex)
+        var lockGameObject = _charaHandler.GetGameObject();
+        if (lockOwner == Pair.ServerIndex && lockGameObject != null)
         {
-            _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, _charaHandler.GetGameObject()!.ObjectIndex).GetAwaiter().GetResult();
+            _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, lockGameObject.ObjectIndex).GetAwaiter().GetResult();
         }
         else
         {

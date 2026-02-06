@@ -93,8 +93,8 @@ public class CompactUi : WindowMediatorSubscriberBase
 
         AllowPinning = false;
         AllowClickthrough = false;
-        TitleBarButtons = new()
-        {
+        TitleBarButtons =
+        [
             new TitleBarButton()
             {
                 Icon = FontAwesomeIcon.Cog,
@@ -108,7 +108,7 @@ public class CompactUi : WindowMediatorSubscriberBase
                     ImGui.BeginTooltip();
                     ImGui.Text("Open Laci Settings");
                     ImGui.EndTooltip();
-                }
+                },
             },
             new TitleBarButton()
             {
@@ -123,11 +123,11 @@ public class CompactUi : WindowMediatorSubscriberBase
                     ImGui.BeginTooltip();
                     ImGui.Text("Open Laci Event Viewer");
                     ImGui.EndTooltip();
-                }
-            }
-        };
+                },
+            },
+        ];
 
-        _drawFolders = GetDrawFolders().ToList();
+        _drawFolders = [.. GetDrawFolders()];
         var ver = Assembly.GetExecutingAssembly().GetName().Version!;
         var versionString = string.Create(CultureInfo.InvariantCulture, $"{ver.Major}.{ver.Minor}.{ver.Build}.{ver.Revision}");
         var sb = new StringBuilder().Append("Laci Synchroni ");
@@ -149,7 +149,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         Mediator.Subscribe<CutsceneEndMessage>(this, (_) => UiSharedService_GposeEnd());
         Mediator.Subscribe<DownloadStartedMessage>(this, (msg) => _currentDownloads[msg.DownloadId] = msg.DownloadStatus);
         Mediator.Subscribe<DownloadFinishedMessage>(this, (msg) => _currentDownloads.TryRemove(msg.DownloadId, out _));
-        Mediator.Subscribe<RefreshUiMessage>(this, (msg) => _drawFolders = GetDrawFolders().ToList());
+        Mediator.Subscribe<RefreshUiMessage>(this, (msg) => _drawFolders = [.. GetDrawFolders()]);
 
         Flags |= ImGuiWindowFlags.NoDocking;
 
@@ -168,21 +168,6 @@ public class CompactUi : WindowMediatorSubscriberBase
             return;
         }
         _windowContentWidth = UiSharedService.GetWindowContentRegionWidth();
-        // if (!_apiController.IsCurrentVersion)
-        // {
-        //     var ver = _apiController.CurrentClientVersion;
-        //     var versionString = string.Create(CultureInfo.InvariantCulture, $"{ver.Major}.{ver.Minor}.{ver.Build}.{ver.Revision}");
-        //     var unsupported = "UNSUPPORTED VERSION";
-        //     using (_uiSharedService.UidFont.Push())
-        //     {
-        //         var uidTextSize = ImGui.CalcTextSize(unsupported);
-        //         ImGui.SetCursorPosX((ImGui.GetWindowContentRegionMax().X + ImGui.GetWindowContentRegionMin().X) / 2 - uidTextSize.X / 2);
-        //         ImGui.AlignTextToFramePadding();
-        //         ImGui.TextColored(ImGuiColors.DalamudRed, unsupported);
-        //     }
-        //     UiSharedService.ColorTextWrapped($"Your Laci Synchroni installation is out of date, the current version is {versionString}. " +
-        //         $"It is highly recommended to keep Laci Synchroni up to date. Open /xlplugins and update the plugin.", ImGuiColors.DalamudRed);
-        // }
 
         if (!_ipcManager.Initialized)
         {
@@ -288,10 +273,17 @@ public class CompactUi : WindowMediatorSubscriberBase
 
     private void DrawEmptyPairs()
     {
-        var ySize = _transferPartHeight == 0
-            ? 1
-            : (ImGui.GetWindowContentRegionMax().Y - ImGui.GetWindowContentRegionMin().Y
-                + ImGui.GetTextLineHeight() - ImGui.GetStyle().WindowPadding.Y - ImGui.GetStyle().WindowBorderSize) - _transferPartHeight - ImGui.GetCursorPosY();
+        float ySize;
+        if (_transferPartHeight is not 0f)
+        {
+            ySize = ImGui.GetWindowContentRegionMax().Y - ImGui.GetWindowContentRegionMin().Y
+                + ImGui.GetTextLineHeight() - ImGui.GetStyle().WindowPadding.Y - ImGui.GetStyle().WindowBorderSize - _transferPartHeight - ImGui.GetCursorPosY();
+        }
+        else
+        {
+            ySize = 1;
+        }
+
 
         ImGui.BeginChild("list", new Vector2(_windowContentWidth, ySize), border: false);
         ImGui.EndChild();
@@ -299,10 +291,10 @@ public class CompactUi : WindowMediatorSubscriberBase
 
     private void DrawPairs()
     {
-        var ySize = _transferPartHeight == 0
+        var ySize = _transferPartHeight is 0f
             ? 1
-            : (ImGui.GetWindowContentRegionMax().Y - ImGui.GetWindowContentRegionMin().Y
-                + ImGui.GetTextLineHeight() - ImGui.GetStyle().WindowPadding.Y - ImGui.GetStyle().WindowBorderSize) - _transferPartHeight - ImGui.GetCursorPosY();
+            : ImGui.GetWindowContentRegionMax().Y - ImGui.GetWindowContentRegionMin().Y
+                + ImGui.GetTextLineHeight() - ImGui.GetStyle().WindowPadding.Y - ImGui.GetStyle().WindowBorderSize - _transferPartHeight - ImGui.GetCursorPosY();
 
         ImGui.BeginChild("list", new Vector2(_windowContentWidth, ySize), border: false);
 
@@ -555,7 +547,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         {
             var authFailureMessage = _apiController.GetAuthFailureMessageByServer(serverId);
             var serverError = GetServerErrorByState(status, authFailureMessage);
-            UiSharedService.ColorTextWrapped($"Error: {status.ToString()}", statusColor);
+            UiSharedService.ColorTextWrapped($"Error: {status}", statusColor);
             UiSharedService.AttachToolTip(serverError);
         }
     }
@@ -611,7 +603,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         return _apiController.GetServerState(serverId) switch
         {
             ServerState.Connected => _apiController.GetUidByServer(serverId),
-            _ => "Offline"
+            _ => "Offline",
         };
     }
 
@@ -626,8 +618,8 @@ public class CompactUi : WindowMediatorSubscriberBase
 
         var config = _playerPerformanceConfigService.Current;
 
-        var playerLoadMemory = _cachedAnalysis.Sum(c => c.Value.Sum(f => f.Value.OriginalSize));
-        var playerLoadTriangles = _cachedAnalysis.Sum(c => c.Value.Sum(f => f.Value.Triangles));
+        var playerLoadMemory = _cachedAnalysis.Values.SelectMany(d => d.Values).Sum(f => f.OriginalSize);
+        var playerLoadTriangles = _cachedAnalysis.Values.SelectMany(d => d.Values).Sum(f => f.Triangles);
 
         var dataSectionTitle = "Character Load Data";
         var origTextSizeX = ImGui.CalcTextSize(dataSectionTitle).X - ImGui.GetStyle().ItemSpacing.X;
@@ -683,7 +675,7 @@ public class CompactUi : WindowMediatorSubscriberBase
                 alert = true;
 
             ImGuiHelpers.ScaledRelativeSameLine(180, ImGui.GetStyle().ItemSpacing.X);
-            var calculatedRam = (float)_playerLoadMemoryKiB / (vramAutoPauseThreshold);
+            var calculatedRam = (float)_playerLoadMemoryKiB / vramAutoPauseThreshold;
 
             DrawProgressBar(calculatedRam, "VRAM usage", warning, alert);
         }
@@ -703,7 +695,7 @@ public class CompactUi : WindowMediatorSubscriberBase
                 alert = true;
 
             ImGuiHelpers.ScaledRelativeSameLine(180, ImGui.GetStyle().ItemSpacing.X);
-            var calculatedTriangles = ((float)playerLoadTriangles / (config.TrisAutoPauseThresholdThousands * 1000));
+            var calculatedTriangles = (float)playerLoadTriangles / (config.TrisAutoPauseThresholdThousands * 1000);
 
             DrawProgressBar(calculatedTriangles, "Triangle count", warning, alert);
         }
@@ -730,12 +722,12 @@ public class CompactUi : WindowMediatorSubscriberBase
 
     private void DrawTransfers()
     {
-        var currentUploads = _fileTransferManager.CurrentUploads.ToList();
+        var currentUploads = _fileTransferManager.GetCurrentUploads().ToList();
         ImGui.AlignTextToFramePadding();
         _uiSharedService.IconText(FontAwesomeIcon.Upload);
         ImGui.SameLine(35 * ImGuiHelpers.GlobalScale);
 
-        if (currentUploads.Any())
+        if (currentUploads.Count != 0)
         {
             var totalUploads = currentUploads.Count;
 
@@ -761,7 +753,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         _uiSharedService.IconText(FontAwesomeIcon.Download);
         ImGui.SameLine(35 * ImGuiHelpers.GlobalScale);
 
-        if (currentDownloads.Any())
+        if (currentDownloads.Count != 0)
         {
             var totalDownloads = currentDownloads.Sum(c => c.TotalFiles);
             var doneDownloads = currentDownloads.Sum(c => c.TransferredFiles);
@@ -783,7 +775,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         }
     }
 
-    private IEnumerable<IDrawFolder> GetDrawFolders()
+    private List<IDrawFolder> GetDrawFolders()
     {
         List<IDrawFolder> drawFolders = [];
 
@@ -800,19 +792,23 @@ public class CompactUi : WindowMediatorSubscriberBase
             .ToDictionary(k => k.Key, k => k.Value);
 
         string? AlphabeticalSort(KeyValuePair<Pair, List<GroupFullInfoDto>> u)
-            => (_configService.Current.ShowCharacterNameInsteadOfNotesForVisible && !string.IsNullOrEmpty(u.Key.PlayerName)
-                    ? (_configService.Current.PreferNotesOverNamesForVisible ? u.Key.GetNote() : u.Key.PlayerName)
-                    : (u.Key.GetNote() ?? u.Key.UserData.AliasOrUID));
+        {
+            if (_configService.Current.ShowCharacterNameInsteadOfNotesForVisible && !string.IsNullOrEmpty(u.Key.PlayerName))
+            {
+                return _configService.Current.PreferNotesOverNamesForVisible ? u.Key.GetNote() : u.Key.PlayerName;
+            }
+            return u.Key.GetNote() ?? u.Key.UserData.AliasOrUID;
+        }
         bool FilterOnlineOrPausedSelf(KeyValuePair<Pair, List<GroupFullInfoDto>> u)
-            => (u.Key.IsOnline || (!u.Key.IsOnline && !_configService.Current.ShowOfflineUsersSeparately)
-                    || u.Key.UserPair.OwnPermissions.IsPaused());
+            => u.Key.IsOnline || (!u.Key.IsOnline && !_configService.Current.ShowOfflineUsersSeparately)
+                    || u.Key.UserPair.OwnPermissions.IsPaused();
         Dictionary<Pair, List<GroupFullInfoDto>> BasicSortedDictionary(IEnumerable<KeyValuePair<Pair, List<GroupFullInfoDto>>> u)
             => u.OrderByDescending(u => u.Key.IsVisible)
                 .ThenByDescending(u => u.Key.IsOnline)
                 .ThenBy(AlphabeticalSort, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(u => u.Key, u => u.Value);
         ImmutableList<Pair> ImmutablePairList(IEnumerable<KeyValuePair<Pair, List<GroupFullInfoDto>>> u)
-            => u.Select(k => k.Key).ToImmutableList();
+            => [.. u.Select(k => k.Key)];
         bool FilterVisibleUsers(KeyValuePair<Pair, List<GroupFullInfoDto>> u)
             => u.Key.IsVisible
                 && (_configService.Current.ShowSyncshellUsersInVisible || !(!_configService.Current.ShowSyncshellUsersInVisible && !u.Key.IsDirectlyPaired));
@@ -825,9 +821,9 @@ public class CompactUi : WindowMediatorSubscriberBase
         bool FilterOfflineUsers(KeyValuePair<Pair, List<GroupFullInfoDto>> u)
             => ((u.Key.IsDirectlyPaired && _configService.Current.ShowSyncshellOfflineUsersSeparately)
                 || !_configService.Current.ShowSyncshellOfflineUsersSeparately)
-                && (!u.Key.IsOneSidedPair || u.Value.Any()) && !u.Key.IsOnline && !u.Key.UserPair.OwnPermissions.IsPaused();
+                && (!u.Key.IsOneSidedPair || u.Value.Count != 0) && !u.Key.IsOnline && !u.Key.UserPair.OwnPermissions.IsPaused();
         bool FilterOfflineSyncshellUsers(KeyValuePair<Pair, List<GroupFullInfoDto>> u)
-            => (!u.Key.IsDirectlyPaired && !u.Key.IsOnline && !u.Key.UserPair.OwnPermissions.IsPaused());
+            => !u.Key.IsDirectlyPaired && !u.Key.IsOnline && !u.Key.UserPair.OwnPermissions.IsPaused();
 
         if (_configService.Current.ShowVisibleUsersSeparately)
         {
@@ -839,7 +835,7 @@ public class CompactUi : WindowMediatorSubscriberBase
             drawFolders.Add(_drawEntityFactory.CreateDrawTagFolderForCustomTag(TagHandler.CustomVisibleTag, filteredVisiblePairs, allVisiblePairs));
         }
 
-        List<IDrawFolder> groupFolders = new();
+        List<IDrawFolder> groupFolders = [];
         foreach (var group in _pairManager.GroupPairs.Select(g => g.Key).OrderBy(g => g.GroupFullInfo.GroupAliasOrGID, StringComparer.OrdinalIgnoreCase))
         {
             var allGroupPairs = ImmutablePairList(allPairs
@@ -885,7 +881,7 @@ public class CompactUi : WindowMediatorSubscriberBase
         var onlineNotTaggedPairs = BasicSortedDictionary(filteredPairs
             .Where(u => FilterNotTaggedUsers(u) && FilterOnlineOrPausedSelf(u)));
 
-        drawFolders.Add(_drawEntityFactory.CreateDrawTagFolderForCustomTag((_configService.Current.ShowOfflineUsersSeparately ? TagHandler.CustomOnlineTag : TagHandler.CustomAllTag), onlineNotTaggedPairs, allOnlineNotTaggedPairs));
+        drawFolders.Add(_drawEntityFactory.CreateDrawTagFolderForCustomTag(_configService.Current.ShowOfflineUsersSeparately ? TagHandler.CustomOnlineTag : TagHandler.CustomAllTag, onlineNotTaggedPairs, allOnlineNotTaggedPairs));
 
         if (_configService.Current.ShowOfflineUsersSeparately)
         {
@@ -942,7 +938,7 @@ public class CompactUi : WindowMediatorSubscriberBase
             ServerState.OAuthLoginTokenStale => "Your OAuth2 login token is stale and cannot be used to renew. Go to the Settings -> Service Settings and unlink then relink your OAuth2 configuration.",
             ServerState.NoAutoLogon => "This character has automatic login disabled for all servers. Press the connect button to connect to a server.",
             ServerState.NoHubFound => "Sync Hub not found. Please request the correct Hub URI from the person running the server you want to connect to.",
-            _ => string.Empty
+            _ => string.Empty,
         };
     }
 
@@ -976,7 +972,7 @@ public class CompactUi : WindowMediatorSubscriberBase
             ServerState.OAuthMisconfigured => ImGuiColors.DalamudRed,
             ServerState.OAuthLoginTokenStale => ImGuiColors.DalamudRed,
             ServerState.NoHubFound => ImGuiColors.DalamudRed,
-            _ => throw new ArgumentOutOfRangeException(nameof(state), state, null)
+            _ => throw new ArgumentOutOfRangeException(nameof(state), state, null),
         };
     }
 

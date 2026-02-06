@@ -9,11 +9,11 @@ using LaciSynchroni.SyncConfiguration;
 
 namespace LaciSynchroni.UI.Handlers;
 
-public class IdDisplayHandler
+public class IdDisplayHandler(SyncMediator mediator, ServerConfigurationManager serverManager, SyncConfigService syncConfigService)
 {
-    private readonly SyncConfigService _syncConfigService;
-    private readonly SyncMediator _mediator;
-    private readonly ServerConfigurationManager _serverManager;
+    private readonly SyncConfigService _syncConfigService = syncConfigService;
+    private readonly SyncMediator _mediator = mediator;
+    private readonly ServerConfigurationManager _serverManager = serverManager;
     private readonly Dictionary<string, bool> _showIdForEntry = new(StringComparer.Ordinal);
     private string _editComment = string.Empty;
     private string _editEntry = string.Empty;
@@ -21,13 +21,6 @@ public class IdDisplayHandler
     private string _lastMouseOverUid = string.Empty;
     private bool _popupShown = false;
     private DateTime? _popupTime;
-
-    public IdDisplayHandler(SyncMediator mediator, ServerConfigurationManager serverManager, SyncConfigService syncConfigService)
-    {
-        _mediator = mediator;
-        _serverManager = serverManager;
-        _syncConfigService = syncConfigService;
-    }
 
     public void DrawGroupText(int serverIndex, string id, GroupFullInfoDto group, float textPosX, Func<float> editBoxWidth)
     {
@@ -42,10 +35,9 @@ public class IdDisplayHandler
 
             if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
             {
-                var prevState = textIsUid;
-                if (_showIdForEntry.ContainsKey(group.GID))
+                if (!_showIdForEntry.TryGetValue(group.GID, out var prevState))
                 {
-                    prevState = _showIdForEntry[group.GID];
+                    prevState = textIsUid;
                 }
                 _showIdForEntry[group.GID] = !prevState;
             }
@@ -128,10 +120,9 @@ public class IdDisplayHandler
 
             if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
             {
-                var prevState = textIsUid;
-                if (_showIdForEntry.ContainsKey(pair.UserData.UID))
+                if (!_showIdForEntry.TryGetValue(pair.UserData.UID, out var prevState))
                 {
-                    prevState = _showIdForEntry[pair.UserData.UID];
+                    prevState = textIsUid;
                 }
                 _showIdForEntry[pair.UserData.UID] = !prevState;
             }

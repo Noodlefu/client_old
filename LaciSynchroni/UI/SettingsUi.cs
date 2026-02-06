@@ -198,7 +198,7 @@ public partial class SettingsUi : WindowMediatorSubscriberBase
 
             ImGui.TableHeadersRow();
 
-            foreach (var item in _fileTransferOrchestrator.ForbiddenTransfers)
+            foreach (var item in _fileTransferOrchestrator.GetForbiddenTransfers())
             {
                 ImGui.TableNextColumn();
                 if (item is UploadFileTransfer transfer)
@@ -360,7 +360,7 @@ public partial class SettingsUi : WindowMediatorSubscriberBase
                     ImGui.TableSetupColumn("Uploaded");
                     ImGui.TableSetupColumn("Size");
                     ImGui.TableHeadersRow();
-                    foreach (var transfer in _fileTransferManager.CurrentUploads.ToArray())
+                    foreach (var transfer in _fileTransferManager.GetCurrentUploads().ToArray())
                     {
                         var color = UiSharedService.UploadColor((transfer.Transferred, transfer.Total));
                         var col = ImRaii.PushColor(ImGuiCol.Text, color);
@@ -1609,12 +1609,12 @@ public partial class SettingsUi : WindowMediatorSubscriberBase
         {
             if (tabBar.Success)
             {
-                _uiShared.CreateTabItem("General", DrawGeneral);
-                _uiShared.CreateTabItem("Performance", DrawPerformance);
-                _uiShared.CreateTabItem("Storage", DrawFileStorageSettings);
-                _uiShared.CreateTabItem("Transfers", DrawCurrentTransfers);
-                _uiShared.CreateTabItem("Service Settings", DrawServerConfiguration);
-                _uiShared.CreateTabItem("Debug", DrawDebug);
+                UiSharedService.CreateTabItem("General", DrawGeneral);
+                UiSharedService.CreateTabItem("Performance", DrawPerformance);
+                UiSharedService.CreateTabItem("Storage", DrawFileStorageSettings);
+                UiSharedService.CreateTabItem("Transfers", DrawCurrentTransfers);
+                UiSharedService.CreateTabItem("Service Settings", DrawServerConfiguration);
+                UiSharedService.CreateTabItem("Debug", DrawDebug);
             }
         }
     }

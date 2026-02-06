@@ -76,9 +76,9 @@ public class DownloadUi : WindowMediatorSubscriberBase
         {
             try
             {
-                if (_fileTransferManager.CurrentUploads.Any())
+                if (_fileTransferManager.GetCurrentUploads().Count != 0)
                 {
-                    var currentUploads = _fileTransferManager.CurrentUploads.ToList();
+                    var currentUploads = _fileTransferManager.GetCurrentUploads().ToList();
                     var totalUploads = currentUploads.Count;
 
                     var doneUploads = currentUploads.Count(c => c.IsTransferred);
@@ -96,7 +96,7 @@ public class DownloadUi : WindowMediatorSubscriberBase
                         $"{UiSharedService.ByteToString(totalUploaded, addSuffix: false)}/{UiSharedService.ByteToString(totalToUpload)}",
                         ImGuiColors.DalamudWhite, new Vector4(0, 0, 0, 255), 1);
 
-                    if (_currentDownloads.Any()) ImGui.Separator();
+                    if (!_currentDownloads.IsEmpty) ImGui.Separator();
                 }
             }
             catch
@@ -225,7 +225,7 @@ public class DownloadUi : WindowMediatorSubscriberBase
     {
         if (_uiShared.EditTrackerPosition) return true;
         if (!_configService.Current.ShowTransferWindow && !_configService.Current.ShowTransferBars) return false;
-        if (!_currentDownloads.Any() && !_fileTransferManager.CurrentUploads.Any() && !_uploadingPlayers.Any()) return false;
+        if (_currentDownloads.IsEmpty && _fileTransferManager.GetCurrentUploads().Count == 0 && _uploadingPlayers.IsEmpty) return false;
         if (!IsOpen) return false;
         return true;
     }

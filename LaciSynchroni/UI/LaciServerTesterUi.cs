@@ -39,7 +39,7 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
     private int _port = 443;
     private string _hubPath = "hub";
     private string _secretKey = "";
-    
+
     // Test status
     private bool _testing;
     private TestStep _testChain;
@@ -48,27 +48,28 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
     // Test context that is used through the entire testing process
     private CancellationTokenSource _cancellationTokenSource = new();
     private string _goatFileHash = "";
-    private List<string> _testLog = new();
+    private List<string> _testLog = [];
     private string _accessToken = "";
     private HubConnection? _hubConnection;
     private ConnectionDto? _connectionDto;
-    
+
     private CancellationToken CancellationToken => _cancellationTokenSource.Token;
 
 
     public LaciServerTesterUi(
-        DalamudUtilService dalamudUtilService, 
+        DalamudUtilService dalamudUtilService,
         IDalamudPluginInterface pluginInterface,
         ILogger<LaciServerTesterUi> logger,
         PerformanceCollectorService performanceCollectorService,
-        UiSharedService uiShared, 
+        UiSharedService uiShared,
         HttpClient httpClient,
         SyncMediator mediator)
         : base(logger, mediator, $"{dalamudUtilService.GetPluginName()} Server Tester", performanceCollectorService)
     {
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(375, 330), MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
+            MinimumSize = new Vector2(375, 330),
+            MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
 
         _goatImagePath = Path.Combine(pluginInterface.AssemblyLocation.Directory!.FullName, "images/goat.png");
@@ -81,7 +82,10 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
     protected override void Dispose(bool disposing)
     {
         _cancellationTokenSource.Cancel();
-        _ = _hubConnection?.DisposeAsync();
+        if (_hubConnection != null)
+        {
+            _ = _hubConnection.DisposeAsync().AsTask();
+        }
     }
 
     private void DrawUi()
@@ -121,11 +125,11 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
 
     private async Task RunTest()
     {
-        _testLog = new List<string>();
+        _testLog = [];
         _cancellationTokenSource.Dispose();
         _cancellationTokenSource = new CancellationTokenSource();
-        
-        
+
+
         var testSuccess = await _testChain.Execute().ConfigureAwait(false);
         if (testSuccess)
         {
@@ -155,7 +159,7 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
     {
         try
         {
-            var negotiateUrl =new UriBuilder(Uri.UriSchemeHttps, _host, _port, $"{_hubPath}/negotiate").Uri;
+            var negotiateUrl = new UriBuilder(Uri.UriSchemeHttps, _host, _port, $"{_hubPath}/negotiate").Uri;
             var resHub = await _httpClient.GetAsync(negotiateUrl, CancellationToken).ConfigureAwait(false);
             var hubExists =
                 resHub.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.OK;
@@ -409,7 +413,7 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
     {
         await _cancellationTokenSource.CancelAsync().ConfigureAwait(false);
         _statusFinal = CheckStatus.NotExecuted;
-        _testLog = new();
+        _testLog = [];
         _accessToken = "";
         _connectionDto = null;
         await DisposeHubIfNeeded().ConfigureAwait(false);
@@ -445,7 +449,7 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
             CheckStatus.Success => FontAwesomeIcon.CheckCircle,
             CheckStatus.Running => FontAwesomeIcon.Running,
             CheckStatus.NotExecuted => FontAwesomeIcon.Question,
-            _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
+            _ => throw new ArgumentOutOfRangeException(nameof(status), status, null),
         };
     }
 
@@ -457,7 +461,7 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
             CheckStatus.Success => ImGuiColors.HealerGreen,
             CheckStatus.Running => ImGuiColors.DalamudOrange,
             CheckStatus.NotExecuted => ImGuiColors.ParsedGrey,
-            _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
+            _ => throw new ArgumentOutOfRangeException(nameof(status), status, null),
         };
     }
 
@@ -471,7 +475,7 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
     {
         return Convert.ToHexString(SHA1.HashData(fileContentUncompressed)).ToUpperInvariant();
     }
-    
+
     internal class TestStep(string description, Func<Task<bool>> testStep, TestStep? next)
     {
         public readonly TestStep? Next = next;
@@ -496,12 +500,12 @@ public sealed class LaciServerTesterUi : WindowMediatorSubscriberBase
             return await Next.Execute().ConfigureAwait(false);
         }
     }
-    
+
     internal enum CheckStatus
     {
         NotExecuted,
         Running,
         Success,
-        Fail
+        Fail,
     }
 }

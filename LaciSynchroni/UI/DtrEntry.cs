@@ -66,7 +66,7 @@ public sealed class DtrEntry : IDisposable, IHostedService
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _cancellationTokenSource.Cancel();
+        await _cancellationTokenSource.CancelAsync().ConfigureAwait(false);
         try
         {
             await _runTask!.ConfigureAwait(false);
@@ -138,7 +138,7 @@ public sealed class DtrEntry : IDisposable, IHostedService
             // Group visible pairs by player identity to avoid counting duplicates across servers
             var visiblePairsByPlayer = _pairManager.GetOnlineUserPairsAcrossAllServers()
                 .Where(x => x.IsVisible)
-                .GroupBy(x => x.GetPlayerNameHash())
+                .GroupBy(x => x.GetPlayerNameHash(), StringComparer.Ordinal)
                 .ToList();
 
             var pairCount = visiblePairsByPlayer.Count;
@@ -161,11 +161,9 @@ public sealed class DtrEntry : IDisposable, IHostedService
                         return string.Format("{0} ({1}{2})", displayName, firstPair.UserData.AliasOrUID,
                             string.IsNullOrEmpty(serverPart) ? "" : $" - {serverPart}");
                     }
-                    else
-                    {
-                        return string.Format("{0} {1}", displayName,
-                            string.IsNullOrEmpty(serverPart) ? "" : $"({serverPart})");
-                    }
+
+                    return string.Format("{0} {1}", displayName,
+                        string.IsNullOrEmpty(serverPart) ? "" : $"({serverPart})");
                 });
 
                 tooltip = $"Laci Synchroni: Connected{Environment.NewLine}----------{Environment.NewLine}{string.Join(Environment.NewLine, visiblePairs)}";

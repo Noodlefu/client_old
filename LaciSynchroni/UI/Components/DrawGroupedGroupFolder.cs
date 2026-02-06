@@ -7,23 +7,16 @@ using System.Numerics;
 
 namespace LaciSynchroni.UI.Components;
 
-public class DrawGroupedGroupFolder : IDrawFolder
+public class DrawGroupedGroupFolder(IEnumerable<IDrawFolder> groups, TagHandler tagHandler, UiSharedService uiSharedService) : IDrawFolder
 {
-    private readonly IEnumerable<IDrawFolder> _groups;
-    private readonly TagHandler _tagHandler;
-    private readonly UiSharedService _uiSharedService;
+    private readonly IEnumerable<IDrawFolder> _groups = groups;
+    private readonly TagHandler _tagHandler = tagHandler;
+    private readonly UiSharedService _uiSharedService = uiSharedService;
     private bool _wasHovered = false;
 
     public IImmutableList<DrawUserPair> DrawPairs => throw new NotSupportedException();
     public int OnlinePairs => _groups.SelectMany(g => g.DrawPairs).Where(g => g.Pair.IsOnline).DistinctBy(g => g.Pair.UserData.UID).Count();
     public int TotalPairs => _groups.Sum(g => g.TotalPairs);
-
-    public DrawGroupedGroupFolder(IEnumerable<IDrawFolder> groups, TagHandler tagHandler, UiSharedService uiSharedService)
-    {
-        _groups = groups;
-        _tagHandler = tagHandler;
-        _uiSharedService = uiSharedService;
-    }
 
     public void Draw()
     {
@@ -51,14 +44,8 @@ public class DrawGroupedGroupFolder : IDrawFolder
             ImGui.SameLine();
             ImGui.AlignTextToFramePadding();
             _uiSharedService.IconText(FontAwesomeIcon.UsersRectangle);
-            //using (ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, ImGui.GetStyle().ItemSpacing with { X = ImGui.GetStyle().ItemSpacing.X / 2f }))
-            //{
-            //    ImGui.SameLine();
-            //    ImGui.AlignTextToFramePadding();
-            //    ImGui.TextUnformatted("[" + OnlinePairs.ToString() + "]");
-            //}
-            UiSharedService.AttachToolTip(OnlinePairs + " online in all of your joined syncshells" + Environment.NewLine +
-                TotalPairs + " pairs combined in all of your joined syncshells");
+
+            UiSharedService.AttachToolTip($"{OnlinePairs} online in all of your joined syncshells{Environment.NewLine}{TotalPairs} pairs combined in all of your joined syncshells");
             ImGui.SameLine();
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted("All Syncshells");

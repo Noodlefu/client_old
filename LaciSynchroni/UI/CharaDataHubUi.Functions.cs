@@ -14,14 +14,14 @@ internal sealed partial class CharaDataHubUi
         AccessTypeDto.ClosePairs => "Direct Pairs",
         AccessTypeDto.Individuals => "Specified",
         AccessTypeDto.Public => "Everyone",
-        _ => dto.ToString()
+        _ => dto.ToString(),
     };
 
     private static string GetShareTypeString(ShareTypeDto dto) => dto switch
     {
         ShareTypeDto.Private => "Code Only",
         ShareTypeDto.Shared => "Shared",
-        _ => dto.ToString()
+        _ => dto.ToString(),
     };
 
     private static string GetWorldDataTooltipText(PoseEntryExtended poseEntry)
@@ -38,7 +38,7 @@ internal sealed partial class CharaDataHubUi
         sb.AppendLine(actionDescription);
         bool isDisabled = false;
 
-        void AddErrorStart(StringBuilder sb)
+        static void AddErrorStart(StringBuilder sb)
         {
             sb.Append(UiSharedService.TooltipSeparator);
             sb.AppendLine("Cannot execute:");
@@ -93,7 +93,7 @@ internal sealed partial class CharaDataHubUi
         sb.AppendLine(poseDescription);
         bool isDisabled = false;
 
-        void AddErrorStart(StringBuilder sb)
+        static void AddErrorStart(StringBuilder sb)
         {
             sb.Append(UiSharedService.TooltipSeparator);
             sb.AppendLine("Cannot execute:");
@@ -134,7 +134,7 @@ internal sealed partial class CharaDataHubUi
         SizeConstraints = new()
         {
             MinimumSize = new((inGposeTab ?? false) ? 400 : 1000, 500),
-            MaximumSize = new((inGposeTab ?? false) ? 400 : 1000, 2000)
+            MaximumSize = new((inGposeTab ?? false) ? 400 : 1000, 2000),
         };
     }
 
@@ -154,11 +154,11 @@ internal sealed partial class CharaDataHubUi
                 bool hasMetaInfo = _charaDataManager.TryGetMetaInfo(favorite.Key, out var metaInfo);
                 bool addFavorite =
                     (string.IsNullOrEmpty(_filterCodeNote)
-                        || (note.Contains(_filterCodeNote, StringComparison.OrdinalIgnoreCase)
-                        || uid.Contains(_filterCodeNote, StringComparison.OrdinalIgnoreCase)))
+                        || note.Contains(_filterCodeNote, StringComparison.OrdinalIgnoreCase)
+                        || uid.Contains(_filterCodeNote, StringComparison.OrdinalIgnoreCase))
                     && (string.IsNullOrEmpty(_filterDescription)
-                        || (favorite.Value.CustomDescription.Contains(_filterDescription, StringComparison.OrdinalIgnoreCase)
-                        || (metaInfo != null && metaInfo!.Description.Contains(_filterDescription, StringComparison.OrdinalIgnoreCase))))
+                        || favorite.Value.CustomDescription.Contains(_filterDescription, StringComparison.OrdinalIgnoreCase)
+                        || (metaInfo != null && metaInfo!.Description.Contains(_filterDescription, StringComparison.OrdinalIgnoreCase)))
                     && (!_filterPoseOnly
                         || (metaInfo != null && metaInfo!.HasPoses))
                     && (!_filterWorldOnly
@@ -170,7 +170,7 @@ internal sealed partial class CharaDataHubUi
             }
 
             _filteredFavorites = newFiltered;
-        });
+        }, _disposalCts.Token);
     }
 
     private void UpdateFilteredItems()

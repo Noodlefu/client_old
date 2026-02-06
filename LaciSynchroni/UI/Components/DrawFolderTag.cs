@@ -10,24 +10,14 @@ using System.Collections.Immutable;
 
 namespace LaciSynchroni.UI.Components;
 
-public class DrawFolderTag : DrawFolderBase
+public class DrawFolderTag(TagWithServerIndex tag, IImmutableList<DrawUserPair> drawPairs, IImmutableList<Pair> allPairs,
+    TagHandler tagHandler, ApiController apiController, SelectPairForTagUi selectPairForTagUi, UiSharedService uiSharedService, ServerConfigurationManager serverConfigManager) : DrawFolderBase(drawPairs, allPairs, uiSharedService)
 {
-    private readonly ApiController _apiController;
-    private readonly ServerConfigurationManager _serverConfigManager;
-    private readonly TagHandler _tagHandler;
-    private readonly SelectPairForTagUi _selectPairForTagUi;
-    private readonly TagWithServerIndex _tag;
-
-    public DrawFolderTag(TagWithServerIndex tag, IImmutableList<DrawUserPair> drawPairs, IImmutableList<Pair> allPairs,
-        TagHandler tagHandler, ApiController apiController, SelectPairForTagUi selectPairForTagUi, UiSharedService uiSharedService, ServerConfigurationManager serverConfigManager)
-        : base(drawPairs, allPairs, uiSharedService)
-    {
-        _apiController = apiController;
-        _selectPairForTagUi = selectPairForTagUi;
-        _serverConfigManager = serverConfigManager;
-        _tagHandler = tagHandler;
-        _tag = tag;
-    }
+    private readonly ApiController _apiController = apiController;
+    private readonly ServerConfigurationManager _serverConfigManager = serverConfigManager;
+    private readonly TagHandler _tagHandler = tagHandler;
+    private readonly SelectPairForTagUi _selectPairForTagUi = selectPairForTagUi;
+    private readonly TagWithServerIndex _tag = tag;
 
     protected override bool RenderIfEmpty => true;
     protected override bool RenderMenu => true;
@@ -103,7 +93,7 @@ public class DrawFolderTag : DrawFolderBase
     {
         var serverName = _serverConfigManager.GetServerNameByIndex(_tag.ServerIndex);
         var serverText = $"For server {serverName}";
-        UiSharedService.AttachToolTip( serverText + Environment.NewLine + OnlinePairs + " online" + Environment.NewLine + TotalPairs + " total");
+        UiSharedService.AttachToolTip($"{serverText}{Environment.NewLine}{OnlinePairs} online{Environment.NewLine}{TotalPairs} total");
     }
 
     private void PauseRemainingPairs(IEnumerable<Pair> availablePairs)

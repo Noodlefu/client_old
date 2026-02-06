@@ -7,22 +7,15 @@ using System.Numerics;
 
 namespace LaciSynchroni.UI.Components;
 
-public abstract class DrawFolderBase : IDrawFolder
+public abstract class DrawFolderBase(IImmutableList<DrawUserPair> drawPairs, IImmutableList<Pair> allPairs, UiSharedService uiSharedService) : IDrawFolder
 {
-    public IImmutableList<DrawUserPair> DrawPairs { get; init; }
-    protected readonly IImmutableList<Pair> _allPairs;
-    protected readonly UiSharedService _uiSharedService;
+    public IImmutableList<DrawUserPair> DrawPairs { get; init; } = drawPairs;
+    protected readonly IImmutableList<Pair> _allPairs = allPairs;
+    protected readonly UiSharedService _uiSharedService = uiSharedService;
     private float _menuWidth = -1;
     public int OnlinePairs => DrawPairs.Count(u => u.Pair.IsOnline);
     public int TotalPairs => _allPairs.Count;
     private bool _wasHovered = false;
-
-    protected DrawFolderBase(IImmutableList<DrawUserPair> drawPairs, IImmutableList<Pair> allPairs, UiSharedService uiSharedService)
-    {
-        DrawPairs = drawPairs;
-        _allPairs = allPairs;
-        _uiSharedService = uiSharedService;
-    }
 
     protected abstract bool RenderIfEmpty { get; }
     protected abstract bool RenderMenu { get; }

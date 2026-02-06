@@ -16,7 +16,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
 {
     private readonly EventAggregator _eventAggregator;
     private readonly UiSharedService _uiSharedService;
-    private List<Event> _currentEvents = new();
+    private List<Event> _currentEvents = [];
     private Lazy<List<Event>> _filteredEvents;
     private string _filterFreeText = string.Empty;
     private string _filterCharacter = string.Empty;
@@ -46,7 +46,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
         SizeConstraints = new()
         {
             MinimumSize = new(600, 500),
-            MaximumSize = new(1000, 2000)
+            MaximumSize = new(1000, 2000),
         };
         _filteredEvents = RecreateFilter();
     }
@@ -54,30 +54,30 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
     private Lazy<List<Event>> RecreateFilter()
     {
         return new(() =>
-            CurrentEvents.Where(f =>
+            [.. CurrentEvents.Where(f =>
                 (string.IsNullOrEmpty(_filterFreeText)
-                || (f.EventSource.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase)
+                || f.EventSource.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase)
                     || f.Character.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase)
                     || f.UID.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase)
                     || f.Message.Contains(_filterFreeText, StringComparison.OrdinalIgnoreCase)
-                ))
+                )
                 &&
                 (string.IsNullOrEmpty(_filterUid)
-                    || (f.UID.Contains(_filterUid, StringComparison.OrdinalIgnoreCase))
+                    || f.UID.Contains(_filterUid, StringComparison.OrdinalIgnoreCase)
                 )
                 &&
                 (string.IsNullOrEmpty(_filterSource)
-                    || (f.EventSource.Contains(_filterSource, StringComparison.OrdinalIgnoreCase))
+                    || f.EventSource.Contains(_filterSource, StringComparison.OrdinalIgnoreCase)
                 )
                 &&
                 (string.IsNullOrEmpty(_filterCharacter)
-                    || (f.Character.Contains(_filterCharacter, StringComparison.OrdinalIgnoreCase))
+                    || f.Character.Contains(_filterCharacter, StringComparison.OrdinalIgnoreCase)
                 )
                 &&
                 (string.IsNullOrEmpty(_filterEvent)
-                    || (f.Message.Contains(_filterEvent, StringComparison.OrdinalIgnoreCase))
+                    || f.Message.Contains(_filterEvent, StringComparison.OrdinalIgnoreCase)
                 )
-             ).ToList());
+             ),]);
     }
 
     private void ClearFilters()
@@ -92,7 +92,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
 
     public override void OnOpen()
     {
-        CurrentEvents = _eventAggregator.EventList.Value.OrderByDescending(f => f.EventTime).ToList();
+        CurrentEvents = [.. _eventAggregator.EventList.Value.OrderByDescending(f => f.EventTime)];
         ClearFilters();
     }
 
@@ -102,7 +102,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
         {
             if (_uiSharedService.IconTextButton(FontAwesomeIcon.ArrowsToCircle, "Refresh events"))
             {
-                CurrentEvents = _eventAggregator.EventList.Value.OrderByDescending(f => f.EventTime).ToList();
+                CurrentEvents = [.. _eventAggregator.EventList.Value.OrderByDescending(f => f.EventTime)];
             }
         }
 
@@ -122,7 +122,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
             {
                 FileName = _eventAggregator.EventLogFolder,
                 UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Normal
+                WindowStyle = ProcessWindowStyle.Normal,
             };
             Process.Start(ps);
         }
@@ -174,7 +174,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
                     EventSeverity.Informational => FontAwesomeIcon.InfoCircle,
                     EventSeverity.Warning => FontAwesomeIcon.ExclamationTriangle,
                     EventSeverity.Error => FontAwesomeIcon.Cross,
-                    _ => FontAwesomeIcon.QuestionCircle
+                    _ => FontAwesomeIcon.QuestionCircle,
                 };
 
                 var iconColor = ev.EventSeverity switch
@@ -182,7 +182,7 @@ internal class EventViewerUI : WindowMediatorSubscriberBase
                     EventSeverity.Informational => new Vector4(),
                     EventSeverity.Warning => ImGuiColors.DalamudYellow,
                     EventSeverity.Error => ImGuiColors.DalamudRed,
-                    _ => new Vector4()
+                    _ => new Vector4(),
                 };
 
                 ImGui.TableNextColumn();

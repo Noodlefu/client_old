@@ -23,13 +23,13 @@ public class DrawCustomTag(
         TagHandler.CustomVisibleTag => false,
         TagHandler.CustomAllTag => true,
         TagHandler.CustomOfflineSyncshellTag => false,
-        _ => throw new InvalidOperationException("Can only render custom tags")
+        _ => throw new InvalidOperationException("Can only render custom tags"),
     };
 
     protected override bool RenderMenu => false;
     protected override bool IsOpen => tagHandler.IsGlobalTagOpen(tag);
     protected override string ComponentId => tag;
-    
+
     protected override float DrawIcon()
     {
         var icon = tag switch
@@ -40,7 +40,7 @@ public class DrawCustomTag(
             TagHandler.CustomOfflineSyncshellTag => FontAwesomeIcon.Unlink,
             TagHandler.CustomVisibleTag => FontAwesomeIcon.Eye,
             TagHandler.CustomAllTag => FontAwesomeIcon.User,
-            _ => throw new InvalidOperationException("Can only render custom tags")
+            _ => throw new InvalidOperationException("Can only render custom tags"),
         };
 
         ImGui.AlignTextToFramePadding();

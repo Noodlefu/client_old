@@ -19,17 +19,10 @@ namespace LaciSynchroni.WebAPI.Files;
 /// Exception thrown when a server returns an empty (0 byte) file response.
 /// This typically indicates the file is missing or unavailable on the CDN.
 /// </summary>
-public class EmptyFileResponseException : Exception
+public sealed class EmptyFileResponseException(string url, long? contentLength) : Exception($"Server returned empty file (0 bytes) for {url}. Content-Length: {contentLength?.ToString() ?? "not set"}")
 {
-    public string Url { get; }
-    public long? ContentLength { get; }
-
-    public EmptyFileResponseException(string url, long? contentLength)
-        : base($"Server returned empty file (0 bytes) for {url}. Content-Length: {contentLength?.ToString() ?? "not set"}")
-    {
-        Url = url;
-        ContentLength = contentLength;
-    }
+    public string Url { get; } = url;
+    public long? ContentLength { get; } = contentLength;
 }
 
 public partial class FileDownloadManager : DisposableMediatorSubscriberBase
@@ -80,7 +73,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 List<ThrottledStream> streams;
                 lock (_activeDownloadStreamsLock)
                 {
-                    streams = _activeDownloadStreams.ToList();
+                    streams = [.. _activeDownloadStreams];
                 }
                 if (streams.Count == 0) return;
                 var newLimit = _orchestrator.DownloadLimitPerSlot();
@@ -99,7 +92,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
     public List<DownloadFileTransfer> CurrentDownloads { get; private set; } = [];
 
-    public bool IsDownloading => CurrentDownloads.Any();
+    public bool IsDownloading => CurrentDownloads.Count > 0;
 
     public static void MungeBuffer(Span<byte> buffer)
     {
@@ -170,7 +163,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         List<ThrottledStream> streamsToDispose;
         lock (_activeDownloadStreamsLock)
         {
-            streamsToDispose = _activeDownloadStreams.ToList();
+            streamsToDispose = [.. _activeDownloadStreams];
         }
         foreach (var stream in streamsToDispose)
         {
@@ -221,7 +214,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             if (!readHash) hashName.Add(readChar);
             else fileLength.Add(readChar);
         }
-        return (string.Join("", hashName), long.Parse(string.Join("", fileLength)));
+        return (new string([.. hashName]), long.Parse(new string([.. fileLength])));
     }
 
     private async Task DownloadAndMungeFileHttpClientWithRetry(int serverIndex, string downloadGroup, Guid requestId, List<DownloadFileTransfer> fileTransfer, string tempPath, IProgress<long> progress, CancellationToken ct)
@@ -256,14 +249,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     Logger.LogWarning(ex, "Download attempt {Attempt}/{MaxAttempts} failed for request {RequestId}, retrying in {Delay}...",
                         attempt + 1, MaxRetryAttempts, requestId, RetryDelays[attempt]);
 
-                    try
-                    {
-                        await Task.Delay(RetryDelays[attempt], ct).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
+                    await Task.Delay(RetryDelays[attempt], ct).ConfigureAwait(false);
                 }
             }
         }
@@ -274,7 +260,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
     private async Task DownloadAndMungeFileHttpClient(int serverIndex, string downloadGroup, Guid requestId, List<DownloadFileTransfer> fileTransfer, string tempPath, IProgress<long> progress, CancellationToken ct)
     {
-        Logger.LogDebug("GUID {requestId} on server {uri} for files {files}", requestId, fileTransfer[0].DownloadUri, string.Join(", ", fileTransfer.Select(c => c.Hash).ToList()));
+        Logger.LogDebug("GUID {requestId} on server {uri} for files {files}", requestId, fileTransfer[0].DownloadUri, string.Join(", ", fileTransfer.Select(c => c.Hash)));
 
         await WaitForDownloadReady(serverIndex, fileTransfer, requestId, ct).ConfigureAwait(false);
 
@@ -344,11 +330,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 Logger.LogDebug("{requestUrl} downloaded to {tempPath}", requestUrl, tempPath);
             }
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception)
+        catch (Exception) when (!ct.IsCancellationRequested)
         {
             try
             {
@@ -381,7 +363,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
         List<DownloadFileDto> downloadFileInfoFromService =
         [
-            .. await FilesGetSizes(serverIndex, fileReplacement.Select(f => f.Hash).Distinct(StringComparer.Ordinal).ToList(), ct).ConfigureAwait(false),
+            .. await FilesGetSizes(serverIndex, [.. fileReplacement.Select(f => f.Hash).Distinct(StringComparer.Ordinal)], ct).ConfigureAwait(false),
         ];
 
         Logger.LogDebug("Files with size 0 or less: {files}", string.Join(", ", downloadFileInfoFromService.Where(f => f.Size <= 0).Select(f => f.Hash)));
@@ -391,8 +373,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             _orchestrator.TryAddForbiddenTransfer(new DownloadFileTransfer(dto, serverIndex));
         }
 
-        CurrentDownloads = downloadFileInfoFromService.Distinct().Select(d => new DownloadFileTransfer(d, serverIndex))
-            .Where(d => d.CanBeTransferred).ToList();
+        CurrentDownloads = [.. downloadFileInfoFromService.Distinct().Select(d => new DownloadFileTransfer(d, serverIndex)).Where(d => d.CanBeTransferred)];
 
         return CurrentDownloads;
     }
@@ -402,43 +383,45 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     /// </summary>
     private async Task ExtractBlockFile(string blockFile, List<FileReplacementData> fileReplacement, string downloadName)
     {
-        FileStream? fileBlockStream = null;
         try
         {
-            fileBlockStream = File.OpenRead(blockFile);
-            while (fileBlockStream.Position < fileBlockStream.Length)
+            var fileBlockStream = File.OpenRead(blockFile);
+            await using (fileBlockStream.ConfigureAwait(false))
             {
-                (string fileHash, long fileLengthBytes) = ReadBlockFileHeader(fileBlockStream);
-
-                try
+                while (fileBlockStream.Position < fileBlockStream.Length)
                 {
-                    var fileExtension = fileReplacement.First(f => string.Equals(f.Hash, fileHash, StringComparison.OrdinalIgnoreCase)).GamePaths[0].Split(".")[^1];
-                    var filePath = _fileDbManager.GetCacheFilePath(fileHash, fileExtension);
-                    Logger.LogDebug("{dlName}: Decompressing {file}:{le} => {dest}", downloadName, fileHash, fileLengthBytes, filePath);
+                    (string fileHash, long fileLengthBytes) = ReadBlockFileHeader(fileBlockStream);
 
-                    byte[] compressedFileContent = new byte[fileLengthBytes];
-                    var readBytes = await fileBlockStream.ReadAsync(compressedFileContent, CancellationToken.None).ConfigureAwait(false);
-                    if (readBytes != fileLengthBytes)
+                    try
                     {
-                        throw new EndOfStreamException();
-                    }
-                    MungeBuffer(compressedFileContent);
+                        var fileExtension = fileReplacement.First(f => string.Equals(f.Hash, fileHash, StringComparison.OrdinalIgnoreCase)).GamePaths[0].Split(".")[^1];
+                        var filePath = _fileDbManager.GetCacheFilePath(fileHash, fileExtension);
+                        Logger.LogDebug("{dlName}: Decompressing {file}:{le} => {dest}", downloadName, fileHash, fileLengthBytes, filePath);
 
-                    await DecompressAndWriteFile(fileHash, filePath, compressedFileContent, downloadName).ConfigureAwait(false);
-                }
-                catch (EndOfStreamException)
-                {
-                    Logger.LogWarning("{dlName}: Failure to extract file {fileHash}, stream ended prematurely", downloadName, fileHash);
-                }
-                catch (Exception e)
-                {
-                    Logger.LogWarning(e, "{dlName}: Error during decompression", downloadName);
+                        byte[] compressedFileContent = new byte[fileLengthBytes];
+                        var readBytes = await fileBlockStream.ReadAsync(compressedFileContent, CancellationToken.None).ConfigureAwait(false);
+                        if (readBytes != fileLengthBytes)
+                        {
+                            throw new EndOfStreamException();
+                        }
+                        MungeBuffer(compressedFileContent);
+
+                        await DecompressAndWriteFile(fileHash, filePath, compressedFileContent, downloadName).ConfigureAwait(false);
+                    }
+                    catch (EndOfStreamException ex)
+                    {
+                        Logger.LogWarning(ex, "{dlName}: Failure to extract file {fileHash}, stream ended prematurely", downloadName, fileHash);
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.LogWarning(e, "{dlName}: Error during decompression", downloadName);
+                    }
                 }
             }
         }
-        catch (EndOfStreamException)
+        catch (EndOfStreamException ex)
         {
-            Logger.LogDebug("{dlName}: Failure to extract file header data, stream ended", downloadName);
+            Logger.LogDebug(ex, "{dlName}: Failure to extract file header data, stream ended", downloadName);
         }
         catch (Exception ex)
         {
@@ -446,8 +429,6 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         }
         finally
         {
-            if (fileBlockStream != null)
-                await fileBlockStream.DisposeAsync().ConfigureAwait(false);
             File.Delete(blockFile);
         }
     }
@@ -535,10 +516,9 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
     private async Task DownloadFilesInternal(int serverIndex, GameObjectHandler gameObjectHandler, List<FileReplacementData> fileReplacement, CancellationToken ct)
     {
-        var downloadGroups = CurrentDownloads.Where(p => !p.IsDirectDownload).GroupBy(f => f.DownloadUri.Host + ":" + f.DownloadUri.Port, StringComparer.Ordinal);
+        var downloadGroups = CurrentDownloads.Where(p => !p.IsDirectDownload).GroupBy(f => $"{f.DownloadUri.Host}:{f.DownloadUri.Port}", StringComparer.Ordinal);
 
-        if (!downloadGroups.Any())
-            return;
+        if (!downloadGroups.Any()) return;
 
         foreach (var downloadGroup in downloadGroups)
         {
@@ -550,7 +530,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     TotalBytes = downloadGroup.Sum(c => c.Total),
                     TotalFiles = 1,
                     TransferredBytes = 0,
-                    TransferredFiles = 0
+                    TransferredFiles = 0,
                 };
             }
         }
@@ -569,52 +549,54 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             // Acquire download slot BEFORE telling server to prepare files.
             // This prevents the server from timing out prepared downloads while we wait for a slot.
             SetDownloadStatus(fileGroup.Key, DownloadStatus.WaitingForSlot);
-            await using var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
-
-            // Now tell server to prepare files
-            var requestIdResponse = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Post, FilesRoutes.RequestEnqueueFullPath(fileGroup.First().DownloadUri),
-                fileGroup.Select(c => c.Hash), token).ConfigureAwait(false);
-            Logger.LogDebug("Sent request for {n} files on server {uri} with result {result}", fileGroup.Count(), fileGroup.First().DownloadUri,
-                await requestIdResponse.Content.ReadAsStringAsync(token).ConfigureAwait(false));
-
-            Guid requestId = Guid.Parse((await requestIdResponse.Content.ReadAsStringAsync().ConfigureAwait(false)).Trim('"'));
-
-            Logger.LogDebug("GUID {requestId} for {n} files on server {uri}", requestId, fileGroup.Count(), fileGroup.First().DownloadUri);
-
-            var blockFile = _fileDbManager.GetCacheFilePath(requestId.ToString("N"), "blk");
-            FileInfo fi = new(blockFile);
-
-            try
+            var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
+            await using (slotLease.ConfigureAwait(false))
             {
-                SetDownloadStatus(fileGroup.Key, DownloadStatus.WaitingForQueue);
-                Progress<long> progress = new((bytesDownloaded) =>
+                // Now tell server to prepare files
+                var requestIdResponse = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Post, FilesRoutes.RequestEnqueueFullPath(fileGroup.First().DownloadUri),
+                    fileGroup.Select(c => c.Hash), token).ConfigureAwait(false);
+                Logger.LogDebug("Sent request for {n} files on server {uri} with result {result}", fileGroup.Count(), fileGroup.First().DownloadUri,
+                    await requestIdResponse.Content.ReadAsStringAsync(token).ConfigureAwait(false));
+
+                Guid requestId = Guid.Parse((await requestIdResponse.Content.ReadAsStringAsync(token).ConfigureAwait(false)).Trim('"'));
+
+                Logger.LogDebug("GUID {requestId} for {n} files on server {uri}", requestId, fileGroup.Count(), fileGroup.First().DownloadUri);
+
+                var blockFile = _fileDbManager.GetCacheFilePath(requestId.ToString("N"), "blk");
+                FileInfo fi = new(blockFile);
+
+                try
                 {
-                    try
+                    SetDownloadStatus(fileGroup.Key, DownloadStatus.WaitingForQueue);
+                    Progress<long> progress = new((bytesDownloaded) =>
                     {
-                        AddTransferredBytes(fileGroup.Key, bytesDownloaded);
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogWarning(ex, "Could not set download progress");
-                    }
-                });
-                await DownloadAndMungeFileHttpClientWithRetry(serverIndex, fileGroup.Key, requestId, [.. fileGroup], blockFile, progress, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                Logger.LogDebug("{dlName}: Detected cancellation of download, partially extracting files for {id}", fi.Name, gameObjectHandler);
-            }
-            catch (Exception ex)
-            {
-                File.Delete(blockFile);
-                Logger.LogError(ex, "{dlName}: Error during download of {id}", fi.Name, requestId);
-                ClearDownload();
-                return;
-            }
+                        try
+                        {
+                            AddTransferredBytes(fileGroup.Key, bytesDownloaded);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "Could not set download progress");
+                        }
+                    });
+                    await DownloadAndMungeFileHttpClientWithRetry(serverIndex, fileGroup.Key, requestId, [.. fileGroup], blockFile, progress, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.LogDebug("{dlName}: Detected cancellation of download, partially extracting files for {id}", fi.Name, gameObjectHandler);
+                }
+                catch (Exception ex)
+                {
+                    File.Delete(blockFile);
+                    Logger.LogError(ex, "{dlName}: Error during download of {id}", fi.Name, requestId);
+                    ClearDownload();
+                    return;
+                }
 
-            SetTransferredFiles(fileGroup.Key, 1);
-            SetDownloadStatus(fileGroup.Key, DownloadStatus.Decompressing);
-            await ExtractBlockFile(blockFile, fileReplacement, fi.Name).ConfigureAwait(false);
+                SetTransferredFiles(fileGroup.Key, 1);
+                SetDownloadStatus(fileGroup.Key, DownloadStatus.Decompressing);
+                await ExtractBlockFile(blockFile, fileReplacement, fi.Name).ConfigureAwait(false);
+            }
         }).ConfigureAwait(false);
 
         Logger.LogDebug("Download end: {id}", gameObjectHandler);
@@ -626,7 +608,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     {
         // Separate out the files with direct download URLs
         var directDownloads = CurrentDownloads.Where(download => download.IsDirectDownload && !string.IsNullOrEmpty(download.DownloadUri.AbsoluteUri)).ToList();
-        if (!directDownloads.Any())
+        if (directDownloads.Count == 0)
             return;
 
         // Create download status trackers for the direct downloads
@@ -649,7 +631,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
         Mediator.Publish(new DownloadStartedMessage(gameObjectHandler, _downloadStatus));
 
         // Start downloading each of the direct downloads
-        var directDownloadsTask = directDownloads.Count == 0 ? Task.CompletedTask : Parallel.ForEachAsync(directDownloads, new ParallelOptions()
+        var directDownloadsTask = Parallel.ForEachAsync(directDownloads, new ParallelOptions()
         {
             // Don't limit parallelism here - let the semaphore in AcquireDownloadSlotAsync control it.
             CancellationToken = ct,
@@ -700,36 +682,38 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
                 // Use slot lease pattern to ensure slot is always released
                 SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.WaitingForSlot);
-                await using var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
+                var slotLease = await _orchestrator.AcquireDownloadSlotAsync(token).ConfigureAwait(false);
+                await using (slotLease.ConfigureAwait(false))
+                {
+                    // Download the compressed file directly with retry logic
+                    SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Downloading);
+                    Logger.LogDebug("{Hash} Beginning direct download of file from {Url}", directDownload.Hash, directDownloadAbsoluteUri);
+                    await DownloadFileThrottledWithRetry(serverIndex, directDownload.DownloadUri, tempFilename, progress, token).ConfigureAwait(false);
 
-                // Download the compressed file directly with retry logic
-                SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Downloading);
-                Logger.LogDebug("{Hash} Beginning direct download of file from {Url}", directDownload.Hash, directDownloadAbsoluteUri);
-                await DownloadFileThrottledWithRetry(serverIndex, directDownload.DownloadUri, tempFilename, progress, token).ConfigureAwait(false);
+                    SetTransferredFiles(directDownloadAbsoluteUri, 1);
+                    SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Decompressing);
 
-                SetTransferredFiles(directDownloadAbsoluteUri, 1);
-                SetDownloadStatus(directDownloadAbsoluteUri, DownloadStatus.Decompressing);
+                    Logger.LogDebug("Decompressing direct download {Hash} from {CompressedFile} to {FinalFile}", directDownload.Hash, tempFilename, finalFilename);
+                    byte[] compressedBytes = await File.ReadAllBytesAsync(tempFilename, token).ConfigureAwait(false);
 
-                Logger.LogDebug("Decompressing direct download {Hash} from {CompressedFile} to {FinalFile}", directDownload.Hash, tempFilename, finalFilename);
-                byte[] compressedBytes = await File.ReadAllBytesAsync(tempFilename, token).ConfigureAwait(false);
-
-                // DecompressAndWriteFile handles calling CompleteFileDownload/FailFileDownload
-                // Pass alreadyAcquired: true since we already called AcquireFileAsync before downloading
-                await DecompressAndWriteFile(directDownload.Hash, finalFilename, compressedBytes, "DirectDownload", alreadyAcquired: true).ConfigureAwait(false);
-                Logger.LogDebug("Finished direct download of {Hash}.", directDownload.Hash);
+                    // DecompressAndWriteFile handles calling CompleteFileDownload/FailFileDownload
+                    // Pass alreadyAcquired: true since we already called AcquireFileAsync before downloading
+                    await DecompressAndWriteFile(directDownload.Hash, finalFilename, compressedBytes, "DirectDownload", alreadyAcquired: true).ConfigureAwait(false);
+                    Logger.LogDebug("Finished direct download of {Hash}.", directDownload.Hash);
+                }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
-                Logger.LogDebug("{Hash}: Detected cancellation of direct download, discarding file.", directDownload.Hash);
+                Logger.LogDebug(ex, "{Hash}: Detected cancellation of direct download, discarding file.", directDownload.Hash);
                 // Signal cancellation so waiters can potentially take over the download
-                _fileDbManager.FailFileDownload(directDownload.Hash, new OperationCanceledException());
+                _fileDbManager.FailFileDownload(directDownload.Hash, ex);
                 ClearDownload();
             }
             catch (EmptyFileResponseException ex)
             {
                 // Server returned empty file - this file is unavailable on the CDN
                 // Add to forbidden transfers so we don't keep trying, and log once at Info level
-                Logger.LogInformation("{Hash}: File unavailable on server (empty response from {Url}). Skipping this file.", directDownload.Hash, ex.Url);
+                Logger.LogInformation(ex, "{Hash}: File unavailable on server (empty response from {Url}). Skipping this file.", directDownload.Hash, ex.Url);
                 _orchestrator.TryAddForbiddenTransfer(directDownload);
                 _fileDbManager.FailFileDownload(directDownload.Hash, ex);
             }
@@ -789,14 +773,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     Logger.LogWarning(ex, "Download attempt {Attempt}/{MaxAttempts} failed for {Url}, retrying in {Delay}...",
                         attempt + 1, MaxRetryAttempts, requestUrl, RetryDelays[attempt]);
 
-                    try
-                    {
-                        await Task.Delay(RetryDelays[attempt], ct).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
+                    await Task.Delay(RetryDelays[attempt], ct).ConfigureAwait(false);
                 }
             }
         }
@@ -847,7 +824,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
             if (!response.IsSuccessStatusCode)
             {
                 // Dump some helpful debugging info
-                string responseText = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                string responseText = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
                 Logger.LogWarning("Unsuccessful status code for {RequestUrl} is {StatusCode}, request headers: \n{Headers}\n, response text: \n\"{ResponseText}\"", requestUrl, response.StatusCode, headersBuilder.ToString(), responseText);
 
                 // Raise an exception etc
@@ -929,11 +906,7 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                 Logger.LogDebug("{RequestUrl} downloaded to {TempPath}, {TotalBytes} bytes", requestUrl, destinationFilename, totalBytesRead);
             }
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception)
+        catch (Exception) when (!ct.IsCancellationRequested)
         {
             try
             {
@@ -962,41 +935,29 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
 
     private async Task<List<DownloadFileDto>> FilesGetSizes(int serverIndex, List<string> hashes, CancellationToken ct)
     {
-        var fileCdnUri = _orchestrator.GetFileCdnUri(serverIndex);
-        if (fileCdnUri == null)
-        {
-            throw new InvalidOperationException("FileTransferManager is not initialized");
-        }
-        HttpResponseMessage? response;
-        if (_serverManager.GetServerByIndex(serverIndex).UsesTimeZone())
-            response = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Get, FilesRoutes.ServerFilesGetSizesFullPath(fileCdnUri, LongitudinalRegion.OffsetFromLocalSystemTimeZone()), hashes, ct).ConfigureAwait(false);
-        else
-            response = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Get, FilesRoutes.ServerFilesGetSizesFullPath(fileCdnUri), hashes, ct).ConfigureAwait(false);
+        var fileCdnUri = _orchestrator.GetFileCdnUri(serverIndex) ?? throw new InvalidOperationException("FileTransferManager is not initialized");
+        var route = _serverManager.GetServerByIndex(serverIndex).UsesTimeZone()
+            ? FilesRoutes.ServerFilesGetSizesFullPath(fileCdnUri, LongitudinalRegion.OffsetFromLocalSystemTimeZone())
+            : FilesRoutes.ServerFilesGetSizesFullPath(fileCdnUri);
 
-        try
-        {
-            return await response.Content.ReadFromJsonAsync<List<DownloadFileDto>>(cancellationToken: ct).ConfigureAwait(false) ?? [];
-        }
-        finally
-        {
-            response?.Dispose();
-        }
+        using var response = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Get, route, hashes, ct).ConfigureAwait(false);
+        return await response.Content.ReadFromJsonAsync<List<DownloadFileDto>>(cancellationToken: ct).ConfigureAwait(false) ?? [];
     }
 
     private void PersistFileToStorage(string fileHash, string filePath)
     {
         var fi = new FileInfo(filePath);
-        Func<DateTime> RandomDayInThePast()
+
+        static DateTime RandomDayInThePast()
         {
             DateTime start = new(1995, 1, 1, 1, 1, 1, DateTimeKind.Local);
-            Random gen = new();
             int range = (DateTime.Today - start).Days;
-            return () => start.AddDays(gen.Next(range));
+            return start.AddDays(Random.Shared.Next(range));
         }
 
-        fi.CreationTime = RandomDayInThePast().Invoke();
+        fi.CreationTime = RandomDayInThePast();
         fi.LastAccessTime = DateTime.Today;
-        fi.LastWriteTime = RandomDayInThePast().Invoke();
+        fi.LastWriteTime = RandomDayInThePast();
         try
         {
             var entry = _fileDbManager.CreateCacheEntry(filePath);
@@ -1020,11 +981,13 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
     private async Task WaitForDownloadReady(int serverIndex, List<DownloadFileTransfer> downloadFileTransfer, Guid requestId, CancellationToken downloadCt)
     {
         bool alreadyCancelled = false;
+        CancellationTokenSource? localTimeoutCts = null;
+        CancellationTokenSource? composite = null;
         try
         {
-            CancellationTokenSource localTimeoutCts = new();
+            localTimeoutCts = new();
             localTimeoutCts.CancelAfter(DownloadReadyPollTimeout);
-            CancellationTokenSource composite = CancellationTokenSource.CreateLinkedTokenSource(downloadCt, localTimeoutCts.Token);
+            composite = CancellationTokenSource.CreateLinkedTokenSource(downloadCt, localTimeoutCts.Token);
 
             while (!_orchestrator.IsDownloadReady(requestId))
             {
@@ -1046,9 +1009,6 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     composite = CancellationTokenSource.CreateLinkedTokenSource(downloadCt, localTimeoutCts.Token);
                 }
             }
-
-            localTimeoutCts.Dispose();
-            composite.Dispose();
 
             Logger.LogDebug("Download {requestId} ready", requestId);
         }
@@ -1079,6 +1039,8 @@ public partial class FileDownloadManager : DisposableMediatorSubscriberBase
                     // ignore whatever happens here
                 }
             }
+            localTimeoutCts?.Dispose();
+            composite?.Dispose();
             _orchestrator.ClearDownloadRequest(requestId);
         }
     }

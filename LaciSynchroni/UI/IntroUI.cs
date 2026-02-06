@@ -1,9 +1,7 @@
 ﻿using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
-using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
-using Dalamud.Utility;
 using LaciSynchroni.FileCache;
 using LaciSynchroni.Interop.Ipc;
 using LaciSynchroni.Localization;
@@ -12,14 +10,12 @@ using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.Services.ServerConfiguration;
 using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.SyncConfiguration.Models;
-using LaciSynchroni.WebAPI;
 using Microsoft.Extensions.Logging;
 using System.Numerics;
-using System.Text.RegularExpressions;
 
 namespace LaciSynchroni.UI;
 
-public partial class IntroUi : WindowMediatorSubscriberBase
+public class IntroUi : WindowMediatorSubscriberBase
 {
     private readonly SyncConfigService _configService;
     private readonly CacheMonitor _cacheMonitor;
@@ -31,7 +27,7 @@ public partial class IntroUi : WindowMediatorSubscriberBase
     private int _currentLanguage;
     private bool _readFirstPage;
 
-    private string _timeoutLabel = string.Empty;
+    private readonly string _timeoutLabel = string.Empty;
     private Task? _timeoutTask;
     private string[]? _tosParagraphs;
 
@@ -227,7 +223,7 @@ public partial class IntroUi : WindowMediatorSubscriberBase
                     var normalizedUri = _customServerUri.TrimEnd('/');
                     if (normalizedUri.EndsWith("/hub", StringComparison.OrdinalIgnoreCase))
                     {
-                        normalizedUri = normalizedUri.Substring(0, normalizedUri.Length - 4).TrimEnd('/');
+                        normalizedUri = normalizedUri[..^4].TrimEnd('/');
                     }
                     var newServer = new ServerStorage
                     {
@@ -258,7 +254,4 @@ public partial class IntroUi : WindowMediatorSubscriberBase
 
         _tosParagraphs = [Strings.ToS.Paragraph1, Strings.ToS.Paragraph2, Strings.ToS.Paragraph3, Strings.ToS.Paragraph4, Strings.ToS.Paragraph6];
     }
-
-    [GeneratedRegex("^([A-F0-9]{2})+")]
-    private static partial Regex HexRegex();
 }

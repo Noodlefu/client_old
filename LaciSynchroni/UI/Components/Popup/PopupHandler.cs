@@ -32,7 +32,7 @@ public class PopupHandler : WindowMediatorSubscriberBase
 
         IsOpen = true;
 
-        _handlers = popupHandlers.ToHashSet();
+        _handlers = [.. popupHandlers];
 
         Mediator.Subscribe<OpenBanUserPopupMessage>(this, (msg) =>
         {

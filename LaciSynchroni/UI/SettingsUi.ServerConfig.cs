@@ -3,13 +3,10 @@ using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
-using Dalamud.Utility;
 using LaciSynchroni.Common.Routes;
 using LaciSynchroni.Utils;
 using LaciSynchroni.Common.SignalR;
 using LaciSynchroni.SyncConfiguration.Models;
-using LaciSynchroni.WebAPI;
-using Microsoft.AspNetCore.Http.Connections;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Numerics;
@@ -45,18 +42,16 @@ public partial class SettingsUi
                 ImGui.TableNextRow();
                 ImGui.TableSetColumnIndex(0);
 
-                bool isSelected = (_lastSelectedServerIndex == server.Id);
+                bool isSelected = _lastSelectedServerIndex == server.Id;
                 ImRaii.PushId(server.Id);
                 if (ImGui.Selectable("##row", isSelected, ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowItemOverlap,
-                    new Vector2(0, rowHeight)))
+                    new Vector2(0, rowHeight)) && _lastSelectedServerIndex != server.Id)
                 {
-                    if (_lastSelectedServerIndex != server.Id)
-                    {
-                        _uiShared.ResetOAuthTasksState();
-                        _secretKeysConversionCts = _secretKeysConversionCts.CancelRecreate();
-                        _secretKeysConversionTask = null;
-                        _lastSelectedServerIndex = server.Id;
-                    }
+                    _uiShared.ResetOAuthTasksState();
+                    _secretKeysConversionCts = _secretKeysConversionCts.CancelRecreate();
+                    _secretKeysConversionTask = null;
+                    _lastSelectedServerIndex = server.Id;
+
                 }
                 ImGui.PopID();
 
@@ -192,8 +187,8 @@ public partial class SettingsUi
 
     private async Task<(bool Success, bool partialSuccess, string Result)> ConvertSecretKeysToUIDs(ServerStorage serverStorage, CancellationToken token)
     {
-        List<Authentication> failedConversions = serverStorage.Authentications.Where(u => u.SecretKeyIdx == -1 && string.IsNullOrEmpty(u.UID)).ToList();
-        List<Authentication> conversionsToAttempt = serverStorage.Authentications.Where(u => u.SecretKeyIdx != -1 && string.IsNullOrEmpty(u.UID)).ToList();
+        List<Authentication> failedConversions = [.. serverStorage.Authentications.Where(u => u.SecretKeyIdx == -1 && string.IsNullOrEmpty(u.UID))];
+        List<Authentication> conversionsToAttempt = [.. serverStorage.Authentications.Where(u => u.SecretKeyIdx != -1 && string.IsNullOrEmpty(u.UID))];
         List<Authentication> successfulConversions = [];
         Dictionary<string, List<Authentication>> secretKeyMapping = new(StringComparer.Ordinal);
         foreach (var authEntry in conversionsToAttempt)
@@ -251,12 +246,12 @@ public partial class SettingsUi
             _serverConfigurationManager.Save();
 
         StringBuilder sb = new();
-        sb.Append("Conversion complete." + Environment.NewLine);
-        sb.Append($"Successfully converted {successfulConversions.Count} entries." + Environment.NewLine);
+        sb.Append("Conversion complete.").AppendLine();
+        sb.Append("Successfully converted ").Append(successfulConversions.Count).Append(" entries.").AppendLine();
         if (failedConversions.Count > 0)
         {
-            sb.Append($"Failed to convert {failedConversions.Count} entries, assign those manually: ");
-            sb.Append(string.Join(", ", failedConversions.Select(k => k.CharacterName)));
+            sb.Append("Failed to convert ").Append(failedConversions.Count).Append(" entries, assign those manually: ");
+            sb.AppendJoin(", ", failedConversions.Select(k => k.CharacterName));
         }
 
         return (true, failedConversions.Count != 0, sb.ToString());

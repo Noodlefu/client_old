@@ -7,24 +7,17 @@ using System.Numerics;
 
 namespace LaciSynchroni.UI.Components;
 
-public class SelectPairForTagUi
+public class SelectPairForTagUi(TagHandler tagHandler, IdDisplayHandler uidDisplayHandler, ServerConfigurationManager serverConfigurationManager)
 {
-    private readonly TagHandler _tagHandler;
-    private readonly IdDisplayHandler _uidDisplayHandler;
-    private readonly ServerConfigurationManager _serverConfigurationManager;
+    private readonly TagHandler _tagHandler = tagHandler;
+    private readonly IdDisplayHandler _uidDisplayHandler = uidDisplayHandler;
+    private readonly ServerConfigurationManager _serverConfigurationManager = serverConfigurationManager;
     private string _filter = string.Empty;
     private bool _opened = false;
     private HashSet<string> _peopleInGroup = new(StringComparer.Ordinal);
     private bool _show = false;
     private string _tag = string.Empty;
     private int _serverIndex = -1;
-
-    public SelectPairForTagUi(TagHandler tagHandler, IdDisplayHandler uidDisplayHandler, ServerConfigurationManager serverConfigurationManager)
-    {
-        _tagHandler = tagHandler;
-        _uidDisplayHandler = uidDisplayHandler;
-        _serverConfigurationManager = serverConfigurationManager;
-    }
 
     public void Draw(List<Pair> pairs)
     {

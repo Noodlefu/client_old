@@ -68,7 +68,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
     /// <summary>
     /// Returns all uploads across all servers. Thread-safe aggregate view.
     /// </summary>
-    public List<FileTransfer> CurrentUploads => _currentUploads.Values.SelectMany(x => x.Values).ToList();
+    public List<FileTransfer> GetCurrentUploads() => [.. _currentUploads.Values.SelectMany(x => x.Values)];
 
     /// <summary>
     /// Gets the upload list for a specific server. Returns a new empty list if none exists.
@@ -95,7 +95,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         Logger.LogDebug("Trying to upload files");
         var filesPresentLocally = hashesToUpload.Where(h => _fileDbManager.GetFileCacheByHash(h) != null).ToHashSet(StringComparer.Ordinal);
         var locallyMissingFiles = hashesToUpload.Except(filesPresentLocally, StringComparer.Ordinal).ToList();
-        if (locallyMissingFiles.Any())
+        if (locallyMissingFiles.Count != 0)
         {
             return locallyMissingFiles;
         }
@@ -114,6 +114,34 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         return [];
     }
 
+    public async Task<CharacterData> UploadFiles(ServerIndex serverIndex, CharacterData data, List<UserData> visiblePlayers)
+    {
+        CancelUpload(serverIndex);
+
+        var tokenSource = new CancellationTokenSource();
+        if (!_cancellationTokens.TryAdd(serverIndex, tokenSource))
+        {
+            Logger.LogError("[{ServerIndex} Failed to add cancellation token, token already present.", serverIndex);
+        }
+        var uploadToken = tokenSource.Token;
+        Logger.LogDebug("Sending Character data {Hash} to service {Url}", data.DataHash.Value, _serverManager.GetServerByIndex(serverIndex).ServerUri);
+
+        HashSet<string> unverifiedUploads = GetUnverifiedFiles(serverIndex, data);
+        if (unverifiedUploads.Count != 0)
+        {
+            await UploadUnverifiedFiles(serverIndex, unverifiedUploads, visiblePlayers, uploadToken).ConfigureAwait(false);
+            var serverName = _serverManager.GetServerByIndex(serverIndex).ServerName;
+            Logger.LogInformation("Upload complete for {Hash} to {serverName}", data.DataHash.Value, serverName);
+        }
+
+        foreach (var kvp in data.FileReplacements)
+        {
+            data.FileReplacements[kvp.Key].RemoveAll(i => _orchestrator.IsForbidden(i.Hash));
+        }
+
+        return data;
+    }
+
     /// <summary>
     /// Uploads files using a producer-consumer pipeline where compression runs ahead of uploads.
     /// </summary>
@@ -125,7 +153,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = false,  // Allow multiple concurrent consumers for parallel uploads
-            SingleWriter = true    // Keep single producer for ordered compression
+            SingleWriter = true,    // Keep single producer for ordered compression
         });
 
         var uploadCount = filesToUpload.Count;
@@ -173,41 +201,13 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         await Task.WhenAll(producerTask, consumerTask).ConfigureAwait(false);
     }
 
-    public async Task<CharacterData> UploadFiles(ServerIndex serverIndex, CharacterData data, List<UserData> visiblePlayers)
-    {
-        CancelUpload(serverIndex);
-
-        var tokenSource = new CancellationTokenSource();
-        if (!_cancellationTokens.TryAdd(serverIndex, tokenSource))
-        {
-            Logger.LogError("[{ServerIndex} Failed to add cancellation token, token already present.", serverIndex);
-        }
-        var uploadToken = tokenSource.Token;
-        Logger.LogDebug("Sending Character data {Hash} to service {Url}", data.DataHash.Value, _serverManager.GetServerByIndex(serverIndex).ServerUri);
-
-        HashSet<string> unverifiedUploads = GetUnverifiedFiles(serverIndex, data);
-        if (unverifiedUploads.Any())
-        {
-            await UploadUnverifiedFiles(serverIndex, unverifiedUploads, visiblePlayers, uploadToken).ConfigureAwait(false);
-            var serverName = _serverManager.GetServerByIndex(serverIndex).ServerName;
-            Logger.LogInformation("Upload complete for {Hash} to {serverName}", data.DataHash.Value, serverName);
-        }
-
-        foreach (var kvp in data.FileReplacements)
-        {
-            data.FileReplacements[kvp.Key].RemoveAll(i => _orchestrator.IsForbidden(i.Hash));
-        }
-
-        return data;
-    }
-
     private async Task<List<UploadFileDto>> FilesSend(int serverIndex, List<string> hashes, List<string> uids, CancellationToken ct)
     {
         var uri = RequireUriForServer(serverIndex);
         FilesSendDto filesSendDto = new()
         {
             FileHashes = hashes,
-            UIDs = uids
+            UIDs = uids,
         };
         using var response = await _orchestrator.SendRequestAsync(serverIndex, HttpMethod.Post, FilesRoutes.ServerFilesFilesSendFullPath(uri), filesSendDto, ct).ConfigureAwait(false);
         return await response.Content.ReadFromJsonAsync<List<UploadFileDto>>(cancellationToken: ct).ConfigureAwait(false) ?? [];
@@ -306,7 +306,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
         unverifiedUploadHashes = unverifiedUploadHashes.Where(h => _fileDbManager.GetFileCacheByHash(h) != null).ToHashSet(StringComparer.Ordinal);
 
         Logger.LogDebug("Verifying {count} files", unverifiedUploadHashes.Count);
-        var filesToUpload = await FilesSend(serverIndex, [.. unverifiedUploadHashes], visiblePlayers.Select(p => p.UID).Distinct(StringComparer.Ordinal).ToList(), uploadToken).ConfigureAwait(false);
+        var filesToUpload = await FilesSend(serverIndex, [.. unverifiedUploadHashes], [.. visiblePlayers.Select(p => p.UID).Distinct(StringComparer.Ordinal)], uploadToken).ConfigureAwait(false);
 
         var serverUploads = GetServerUploads(serverIndex);
         foreach (var file in filesToUpload.Where(f => !f.IsForbidden).DistinctBy(f => f.Hash))
@@ -378,8 +378,7 @@ public sealed class FileUploadManager : DisposableMediatorSubscriberBase
 
     private Uri RequireUriForServer(int serverIndex)
     {
-        var uri = _orchestrator.GetFileCdnUri(serverIndex);
-        if (uri == null) throw new InvalidOperationException("FileTransferManager is not initialized");
+        var uri = _orchestrator.GetFileCdnUri(serverIndex) ?? throw new InvalidOperationException("FileTransferManager is not initialized");
         return uri;
     }
 

@@ -8,6 +8,7 @@ using LaciSynchroni.Common.Data.Enum;
 using LaciSynchroni.Common.Data.Extensions;
 using LaciSynchroni.Common.Dto;
 using LaciSynchroni.Common.Dto.Group;
+using LaciSynchroni.PlayerData.Pairs;
 using LaciSynchroni.Services;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.Services.ServerConfiguration;
@@ -21,6 +22,7 @@ namespace LaciSynchroni.UI;
 internal class JoinSyncshellUI : WindowMediatorSubscriberBase
 {
     private readonly ApiController _apiController;
+    private readonly PairManager _pairManager;
     private readonly UiSharedService _uiSharedService;
     private readonly ServerConfigurationManager _serverConfigurationManager;
     private readonly ServerSelectorSmall _serverSelector;
@@ -31,16 +33,17 @@ internal class JoinSyncshellUI : WindowMediatorSubscriberBase
     private GroupJoinInfoDto? _groupJoinInfo = null;
     private Task<GroupJoinInfoDto>? _joinGroupTask;
     private bool _joinGroupFailed = false;
-    private DefaultPermissionsDto _ownPermissions = null!;
+    private DefaultPermissionsDto _ownPermissions = new();
     private string _previousPassword = string.Empty;
     private string _syncshellPassword = string.Empty;
 
     public JoinSyncshellUI(ILogger<JoinSyncshellUI> logger, SyncMediator mediator,
-        UiSharedService uiSharedService, ApiController apiController, PerformanceCollectorService performanceCollectorService, ServerConfigurationManager serverConfigurationManager)
+        UiSharedService uiSharedService, ApiController apiController, PairManager pairManager, PerformanceCollectorService performanceCollectorService, ServerConfigurationManager serverConfigurationManager)
         : base(logger, mediator, "Join existing Syncshell###LaciSynchroniJoinSyncshell", performanceCollectorService)
     {
         _uiSharedService = uiSharedService;
         _apiController = apiController;
+        _pairManager = pairManager;
         _serverConfigurationManager = serverConfigurationManager;
         _serverSelector = new ServerSelectorSmall(index =>
         {
@@ -52,7 +55,7 @@ internal class JoinSyncshellUI : WindowMediatorSubscriberBase
         SizeConstraints = new()
         {
             MinimumSize = new(700, 400),
-            MaximumSize = new(700, 400)
+            MaximumSize = new(700, 400),
         };
 
         Mediator.Subscribe<DisconnectedMessage>(this, (_) =>
@@ -88,9 +91,8 @@ internal class JoinSyncshellUI : WindowMediatorSubscriberBase
 
         if (_groupJoinInfo == null || !_groupJoinInfo.Success)
         {
-            UiSharedService.TextWrapped("Here you can join existing Syncshells. " +
-                "Please keep in mind that you cannot join more than " + _apiController.GetMaxGroupsJoinedByUser(_desiredServerForSyncshell) + " syncshells on this server." + Environment.NewLine +
-                "Joining a Syncshell will pair you implicitly with all existing users in the Syncshell." + Environment.NewLine +
+            UiSharedService.TextWrapped($"Here you can join existing Syncshells. Please keep in mind that you cannot join more than {_apiController.GetMaxGroupsJoinedByUser(_desiredServerForSyncshell)} syncshells on this server.{Environment.NewLine}" +
+                $"Joining a Syncshell will pair you implicitly with all existing users in the Syncshell.{Environment.NewLine}" +
                 "All permissions to all users in the Syncshell will be set to the preferred Syncshell permissions on joining, excluding prior set preferred permissions.");
             ImGui.Separator();
             ImGui.TextUnformatted("Note: Syncshell ID and Password are case sensitive. MSS- is part of Syncshell IDs, unless using Vanity IDs.");
@@ -110,8 +112,11 @@ internal class JoinSyncshellUI : WindowMediatorSubscriberBase
             ImGui.SameLine(200);
             ImGui.InputTextWithHint("##syncshellpw", "Password", ref _syncshellPassword, 50, ImGuiInputTextFlags.Password);
 
-            // TODO disable when there is no more joins left
-            using (ImRaii.Disabled(string.IsNullOrEmpty(_desiredSyncshellToJoin) || string.IsNullOrEmpty(_syncshellPassword) || (_joinGroupTask != null && !_joinGroupTask.IsCompleted)))
+            var maxJoinable = _apiController.GetMaxGroupsJoinedByUser(_desiredServerForSyncshell);
+            var noJoinsLeft = _pairManager.GroupPairs.Select(k => k.Key).Distinct()
+                .Where(g => g.ServerIndex == _desiredServerForSyncshell)
+                .Skip(maxJoinable - 1).Any();
+            using (ImRaii.Disabled(noJoinsLeft || string.IsNullOrEmpty(_desiredSyncshellToJoin) || string.IsNullOrEmpty(_syncshellPassword) || (_joinGroupTask != null && !_joinGroupTask.IsCompleted)))
             {
                 if (_joinGroupTask != null && _joinGroupTask.IsCompleted)
                 {

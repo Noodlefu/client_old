@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 
 namespace LaciSynchroni.WebAPI;
+
 using ServerIndex = int;
 
 #pragma warning disable MA0040
@@ -62,7 +63,7 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase
         _httpClient = httpClient;
         _loggerFactory = loggerFactory;
         _loggerProvider = loggerProvider;
-        
+
         // When we log out, we could either:
         // - Disconnect all clients
         // - Dispose all clients
@@ -146,10 +147,11 @@ public sealed partial class ApiController : DisposableMediatorSubscriberBase
         }
     }
 
-    public int[] ConnectedServerIndexes {
+    public int[] ConnectedServerIndexes
+    {
         get
         {
-            return [.._syncClients.Where(p=> p.Value._serverState == ServerState.Connected)?.Select(p=> p.Key) ?? []];
+            return [.. _syncClients.Where(p => p.Value._serverState == ServerState.Connected)?.Select(p => p.Key) ?? []];
         }
     }
 

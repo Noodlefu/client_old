@@ -13,6 +13,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using LaciSynchroni.FileCache;
 using LaciSynchroni.Interop.Ipc;
+using HttpServerState = LaciSynchroni.Interop.Ipc.LocalHttpServer.HttpServerState;
 using LaciSynchroni.Localization;
 using LaciSynchroni.PlayerData.Pairs;
 using LaciSynchroni.Services;
@@ -70,7 +71,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
     private bool _isOneDrive = false;
     private bool _isPenumbraDirectory = false;
     private bool _moodlesExists = false;
-    private Dictionary<string, DateTime> _oauthTokenExpiry = new();
+    private readonly Dictionary<string, DateTime> _oauthTokenExpiry = [];
     private bool _penumbraExists = false;
     private bool _petNamesExists = false;
     public UiSharedService(ILogger<UiSharedService> logger, IpcManager ipcManager, ApiController apiController,
@@ -111,7 +112,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
         {
             e.OnPreBuild(tk => tk.AddDalamudAssetFont(DalamudAsset.NotoSansJpMedium, new()
             {
-                SizePx = 35
+                SizePx = 35,
             }));
         });
         GameFont = _pluginInterface.UiBuilder.FontAtlas.NewGameFontHandle(new(GameFontFamilyAndSize.Axis12));
@@ -428,8 +429,12 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
         ImGui.PopTextWrapPos();
     }
 
-    public static Vector4 UploadColor((long, long) data) => data.Item1 == 0 ? ImGuiColors.DalamudGrey :
-        data.Item1 == data.Item2 ? ImGuiColors.ParsedGreen : ImGuiColors.DalamudYellow;
+    public static Vector4 UploadColor((long, long) data) => data switch
+    {
+        { Item1: 0 } => ImGuiColors.DalamudGrey,
+        var d when d.Item1 == d.Item2 => ImGuiColors.ParsedGreen,
+        _ => ImGuiColors.DalamudYellow,
+    };
 
     public bool ApplyNotesFromClipboard(int serverIndex, string notes, bool overwrite)
     {
@@ -453,9 +458,9 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
                 if (_serverConfigurationManager.GetNoteForUid(serverIndex, uid) != null && !overwrite) continue;
                 _serverConfigurationManager.SetNoteForUid(serverIndex, uid, comment);
             }
-            catch
+            catch (Exception ex)
             {
-                Logger.LogWarning("Could not parse {note}", note);
+                Logger.LogWarning(ex, "Could not parse {note}", note);
             }
         }
 
@@ -514,7 +519,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
                         }
                     }
                     var dirs = Directory.GetDirectories(path);
-                    if (dirs.Any())
+                    if (dirs.Length != 0)
                     {
                         _cacheDirectoryHasOtherFilesThanCache = true;
                         Logger.LogWarning("Found folders in {Path} not belonging to {PluginName}: {Dirs}", path, _dalamudUtil.GetPluginName(), string.Join(", ", dirs));
@@ -627,7 +632,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
         {
             ImGui.AlignTextToFramePadding();
 
-            ImGui.TextUnformatted("Halted (" + string.Join(", ", _cacheMonitor.HaltScanLocks.Where(f => f.Value > 0).Select(locker => locker.Key + ": " + locker.Value + " halt requests")) + ")");
+            ImGui.TextUnformatted($"Halted ({string.Join(", ", _cacheMonitor.HaltScanLocks.Where(f => f.Value > 0).Select(locker => $"{locker.Key}: {locker.Value} halt requests"))})");
             ImGui.SameLine();
             if (ImGui.Button("Reset halt requests##clearlocks"))
             {
@@ -742,7 +747,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
             if (tokenExpiry > DateTime.UtcNow)
             {
                 ColorTextWrapped($"OAuth2 is enabled, linked to: Discord User {_serverConfigurationManager.GetDiscordUserFromToken(selectedServer)}", ImGuiColors.HealerGreen);
-                TextWrapped($"The OAuth2 token will expire on {tokenExpiry:yyyy-MM-dd} and automatically renew itself during login on or after {(tokenExpiry - TimeSpan.FromDays(7)):yyyy-MM-dd}.");
+                TextWrapped($"The OAuth2 token will expire on {tokenExpiry:yyyy-MM-dd} and automatically renew itself during login on or after {tokenExpiry - TimeSpan.FromDays(7):yyyy-MM-dd}.");
                 using (ImRaii.Disabled(!CtrlPressed()))
                 {
                     if (IconTextButton(FontAwesomeIcon.Exclamation, "Renew OAuth2 token manually") && CtrlPressed())
@@ -869,7 +874,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
                     var normalizedUri = _customServerUri.TrimEnd('/');
                     if (normalizedUri.EndsWith("/hub", StringComparison.OrdinalIgnoreCase))
                     {
-                        normalizedUri = normalizedUri.Substring(0, normalizedUri.Length - 4).TrimEnd('/');
+                        normalizedUri = normalizedUri[..^4].TrimEnd('/');
                     }
                     var newServer = new ServerStorage
                     {
@@ -891,8 +896,8 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
     {
         using (ImRaii.Disabled(_discordOAuthUIDs == null))
         {
-            var aliasPairs = _discordOAuthUIDs?.Result?.Select(t => new UIDAliasPair(t.Key, t.Value)).ToList() ?? [new UIDAliasPair(item.UID ?? null, null)];
-            var uidComboName = "UID###" + item.CharacterName + item.WorldId + serverUri + indexOffset + aliasPairs.Count;
+            var aliasPairs = _discordOAuthUIDs?.Result?.Select(t => new UidAliasPair(t.Key, t.Value)).ToList() ?? [new UidAliasPair(item.UID ?? null, null)];
+            var uidComboName = $"UID###{item.CharacterName}{item.WorldId}{serverUri}{indexOffset}{aliasPairs.Count}";
             DrawCombo(uidComboName, aliasPairs,
                 (v) =>
                 {
@@ -1044,30 +1049,27 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
             width <= 0 ? null : width);
     }
 
-    public void CreateTabItem(string name, Action drawAction)
+    public static void CreateTabItem(string name, Action drawAction)
     {
-        using (var tabItem = ImRaii.TabItem(name))
+        using var tabItem = ImRaii.TabItem(name);
+        if (tabItem.Success)
         {
-            if (tabItem.Success)
-            {
-                using (var child = ImRaii.Child($"{name.Replace(" ", string.Empty)}Child", new Vector2(0, 0), false))
-                {
-                    if (child.Success)
-                        drawAction?.Invoke();
-                }
-            }
+            using var child = ImRaii.Child($"{name.Replace(" ", string.Empty)}Child", new Vector2(0, 0), false);
+            if (child.Success)
+                drawAction?.Invoke();
+
         }
     }
 
     public void DrawLocalHTTPServerEnableButton(LocalHttpServer _httpServer)
     {
-        var isEnabled = _httpServer.State == LocalHttpServer.HttpServerState.STARTED;
-        var color = UiSharedService.GetBoolColor(!isEnabled);
+        var isEnabled = _httpServer.State == HttpServerState.STARTED;
+        var color = GetBoolColor(!isEnabled);
         var icon = FontAwesomeIcon.Server;
 
         using (ImRaii.PushColor(ImGuiCol.Text, color))
         {
-            using var disabled = ImRaii.Disabled(_httpServer.State == LocalHttpServer.HttpServerState.STARTING);
+            using var disabled = ImRaii.Disabled(_httpServer.State == HttpServerState.STARTING);
             if (IconButton(icon, "localhttpserverstartstop"))
             {
                 if (isEnabled)
@@ -1080,24 +1082,24 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
                 }
             }
         }
-        UiSharedService.AttachToolTip(isEnabled ?
+        AttachToolTip(isEnabled ?
            "Disable quick connect server." :
            "Enable quick connect server. This allows a new service to be added by clicking a link provided by a Laci server. ONLY TURN THIS ON TEMPORARILY WHEN ADDING A NEW SERVER.");
 
         ImGui.SameLine();
         switch (_httpServer.State)
         {
-            case LocalHttpServer.HttpServerState.STOPPED:
-                UiSharedService.ColorTextWrapped("Quick Connect listener is inactive!", ImGuiColors.ParsedGrey);
+            case HttpServerState.STOPPED:
+                ColorTextWrapped("Quick Connect listener is inactive!", ImGuiColors.ParsedGrey);
                 break;
-            case LocalHttpServer.HttpServerState.STARTING:
-                UiSharedService.ColorTextWrapped("Quick Connect listener is starting!", ImGuiColors.DalamudYellow);
+            case HttpServerState.STARTING:
+                ColorTextWrapped("Quick Connect listener is starting!", ImGuiColors.DalamudYellow);
                 break;
-            case LocalHttpServer.HttpServerState.STARTED:
-                UiSharedService.ColorTextWrapped("Quick Connect listener is active!", ImGuiColors.ParsedGreen);
+            case HttpServerState.STARTED:
+                ColorTextWrapped("Quick Connect listener is active!", ImGuiColors.ParsedGreen);
                 break;
-            case LocalHttpServer.HttpServerState.ERROR:
-                UiSharedService.ColorTextWrapped("An error occurred starting the Quick Connect listener, please try again, or report it in our Discord if it happens repeatedly.", ImGuiColors.DalamudRed);
+            case HttpServerState.ERROR:
+                ColorTextWrapped("An error occurred starting the Quick Connect listener, please try again, or report it in our Discord if it happens repeatedly.", ImGuiColors.DalamudRed);
                 break;
         }
     }
@@ -1143,6 +1145,7 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
 
         base.Dispose(disposing);
 
+        _discordOAuthGetCts.Dispose();
         UidFont.Dispose();
         GameFont.Dispose();
     }
@@ -1202,5 +1205,5 @@ public partial class UiSharedService : DisposableMediatorSubscriberBase
         return result;
     }
     public sealed record IconScaleData(Vector2 IconSize, Vector2 NormalizedIconScale, float OffsetX, float IconScaling);
-    private record UIDAliasPair(string? UID, string? Alias);
+    private sealed record UidAliasPair(string? UID, string? Alias);
 }

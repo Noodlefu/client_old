@@ -1,4 +1,5 @@
-﻿using LaciSynchroni.Common.Data;
+﻿using System.Collections.Concurrent;
+using LaciSynchroni.Common.Data;
 using LaciSynchroni.Services;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.Utils;
@@ -22,6 +23,12 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
     private readonly SemaphoreSlim _pushDataSemaphore = new(1, 1);
     private readonly CancellationTokenSource _runtimeCts = new();
 
+    /// <summary>
+    /// Tracks recent pushes by (serverIndex, UID, dataHash) to avoid redundant pushes
+    /// when users flicker in and out of visibility in crowded areas.
+    /// </summary>
+    private readonly ConcurrentDictionary<(int ServerIndex, string UID, string DataHash), long> _recentPushes = [];
+    private static readonly long PushDeduplicationWindowTicks = TimeSpan.FromSeconds(60).Ticks;
 
     public VisibleUserDataDistributor(ILogger<VisibleUserDataDistributor> logger, ApiController apiController, DalamudUtilService dalamudUtil,
         PairManager pairManager, SyncMediator mediator, FileUploadManager fileTransferManager) : base(logger, mediator)
@@ -37,6 +44,7 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
             if (_lastCreatedData == null || (!string.Equals(newData.DataHash.Value, _lastCreatedData.DataHash.Value, StringComparison.Ordinal)))
             {
                 _lastCreatedData = newData;
+                _recentPushes.Clear();
                 Logger.LogTrace("Storing new data hash {hash}", newData.DataHash.Value);
                 PushToAllVisibleUsers(forced: true);
             }
@@ -108,10 +116,26 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
         _previouslyVisiblePlayers.AddRange(allVisibleUsers);
         if (newVisibleUsers.Count == 0) return;
 
+        // Filter out users we've recently pushed the same data to
+        var dataHash = _lastCreatedData?.DataHash.Value ?? string.Empty;
+        var now = DateTime.UtcNow.Ticks;
+        var filteredUsers = newVisibleUsers.Where(user =>
+        {
+            var key = (user.ServerIndex, user.UserData.UID, dataHash);
+            return !_recentPushes.TryGetValue(key, out var lastPush) || (now - lastPush) > PushDeduplicationWindowTicks;
+        }).ToList();
+
+        if (filteredUsers.Count == 0) return;
+
+        if (filteredUsers.Count < newVisibleUsers.Count)
+        {
+            Logger.LogDebug("Skipped {count} recently pushed users", newVisibleUsers.Count - filteredUsers.Count);
+        }
+
         Logger.LogDebug("Scheduling character data push of {data} to {users}",
-            _lastCreatedData?.DataHash.Value ?? string.Empty,
-            string.Join(", ", newVisibleUsers.Select(k => k.UserData.AliasOrUID)));
-        foreach (var user in newVisibleUsers)
+            dataHash,
+            string.Join(", ", filteredUsers.Select(k => k.UserData.AliasOrUID)));
+        foreach (var user in filteredUsers)
         {
             _usersToPushDataTo.Add(user);
         }
@@ -161,6 +185,14 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
                             .Select(key => key.UserData);
                         await _apiController.PushCharacterData(serverIndex, dataToSend, [.. toPushForServer])
                             .ConfigureAwait(false);
+                    }
+
+                    // Record successful pushes for deduplication
+                    var pushTime = DateTime.UtcNow.Ticks;
+                    var hash = dataToSend.DataHash.Value;
+                    foreach (var user in _usersToPushDataTo)
+                    {
+                        _recentPushes[(user.ServerIndex, user.UserData.UID, hash)] = pushTime;
                     }
 
                     _usersToPushDataTo.Clear();

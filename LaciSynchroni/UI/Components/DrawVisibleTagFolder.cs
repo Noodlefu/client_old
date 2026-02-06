@@ -2,51 +2,37 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility.Raii;
-using LaciSynchroni.Common.Data.Enum;
 using LaciSynchroni.Common.Data.Extensions;
 using LaciSynchroni.PlayerData.Pairs;
-using LaciSynchroni.Services;
 using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.UI.Handlers;
 using LaciSynchroni.WebAPI;
-using System;
-using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Linq;
 using System.Text;
 
 namespace LaciSynchroni.UI.Components;
 
-public class DrawVisibleTagFolder : DrawCustomTag
+public class DrawVisibleTagFolder(
+    IImmutableList<DrawUserPair> drawPairs,
+    IImmutableList<Pair> allPairs,
+    TagHandler tagHandler,
+    UiSharedService uiSharedService,
+    ApiController apiController,
+    SyncConfigService configService,
+    SyncMediator mediator,
+    PlayerPerformanceConfigService performanceConfigService) : DrawCustomTag(TagHandler.CustomVisibleTag, drawPairs, allPairs, tagHandler, uiSharedService)
 {
-    private readonly ApiController _apiController;
-    private readonly SyncConfigService _configService;
-    private readonly SyncMediator _mediator;
-    private readonly PlayerPerformanceConfigService _performanceConfigService;
+    private readonly ApiController _apiController = apiController;
+    private readonly SyncConfigService _configService = configService;
+    private readonly SyncMediator _mediator = mediator;
+    private readonly PlayerPerformanceConfigService _performanceConfigService = performanceConfigService;
 
     private static readonly VisibleGroupKeyComparer GroupKeyComparer = VisibleGroupKeyComparer.Instance;
     private IImmutableList<DrawUserPair>? _lastDrawPairsRef;
     private List<GroupBucket>? _cachedBuckets;
     private readonly HashSet<VisibleGroupKey> _openGroups = new(GroupKeyComparer);
     private readonly Dictionary<VisibleGroupKey, bool> _hoveredGroups = new(GroupKeyComparer);
-
-    public DrawVisibleTagFolder(
-        IImmutableList<DrawUserPair> drawPairs,
-        IImmutableList<Pair> allPairs,
-        TagHandler tagHandler,
-        UiSharedService uiSharedService,
-        ApiController apiController,
-        SyncConfigService configService,
-        SyncMediator mediator,
-        PlayerPerformanceConfigService performanceConfigService)
-        : base(TagHandler.CustomVisibleTag, drawPairs, allPairs, tagHandler, uiSharedService)
-    {
-        _apiController = apiController;
-        _configService = configService;
-        _mediator = mediator;
-        _performanceConfigService = performanceConfigService;
-    }
 
     protected override void DrawOpenedContent()
     {
@@ -230,7 +216,7 @@ public class DrawVisibleTagFolder : DrawCustomTag
         sb.Append(UiSharedService.TooltipSeparator);
         sb.Append("Connections:");
 
-        bool anyVisible = members.Any(m => m.Pair.IsVisible);
+        bool anyVisible = members.Exists(m => m.Pair.IsVisible);
 
         foreach (var member in members)
         {
@@ -261,7 +247,7 @@ public class DrawVisibleTagFolder : DrawCustomTag
             var pairingInfo = member.BuildPairingInfoSection(false);
             if (!string.IsNullOrEmpty(pairingInfo))
             {
-                var pairingLines = pairingInfo.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+                var pairingLines = pairingInfo.Split([Environment.NewLine], StringSplitOptions.RemoveEmptyEntries);
                 foreach (var line in pairingLines)
                 {
                     sb.AppendLine().Append("  ").Append(line);
@@ -323,15 +309,11 @@ public class DrawVisibleTagFolder : DrawCustomTag
         return null;
     }
 
-    private sealed class GroupBucket
+    private sealed class GroupBucket(DrawVisibleTagFolder.VisibleGroupKey? key)
     {
-        public GroupBucket(VisibleGroupKey? key)
-        {
-            Key = key;
-        }
 
-        public VisibleGroupKey? Key { get; }
-        public List<DrawUserPair> Members { get; } = new();
+        public VisibleGroupKey? Key { get; } = key;
+        public List<DrawUserPair> Members { get; } = [];
     }
 
     private readonly record struct VisibleGroupKey(string Name, ushort WorldId);

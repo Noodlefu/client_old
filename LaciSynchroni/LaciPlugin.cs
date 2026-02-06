@@ -69,25 +69,17 @@ namespace LaciSynchroni;
 */
 #pragma warning restore S125 // Sections of code should not be commented out
 
-public class LaciPlugin : MediatorSubscriberBase, IHostedService
+public class LaciPlugin(ILogger<LaciPlugin> logger, SyncConfigService syncConfigService,
+    ServerConfigurationManager serverConfigurationManager,
+    DalamudUtilService dalamudUtil,
+    IServiceScopeFactory serviceScopeFactory, SyncMediator mediator) : MediatorSubscriberBase(logger, mediator), IHostedService
 {
-    private readonly DalamudUtilService _dalamudUtil;
-    private readonly SyncConfigService _syncConfigService;
-    private readonly ServerConfigurationManager _serverConfigurationManager;
-    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly DalamudUtilService _dalamudUtil = dalamudUtil;
+    private readonly SyncConfigService _syncConfigService = syncConfigService;
+    private readonly ServerConfigurationManager _serverConfigurationManager = serverConfigurationManager;
+    private readonly IServiceScopeFactory _serviceScopeFactory = serviceScopeFactory;
     private IServiceScope? _runtimeServiceScope;
     private Task? _launchTask = null;
-
-    public LaciPlugin(ILogger<LaciPlugin> logger, SyncConfigService syncConfigService,
-        ServerConfigurationManager serverConfigurationManager,
-        DalamudUtilService dalamudUtil,
-        IServiceScopeFactory serviceScopeFactory, SyncMediator mediator) : base(logger, mediator)
-    {
-        _syncConfigService = syncConfigService;
-        _serverConfigurationManager = serverConfigurationManager;
-        _dalamudUtil = dalamudUtil;
-        _serviceScopeFactory = serviceScopeFactory;
-    }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {

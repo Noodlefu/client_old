@@ -103,7 +103,7 @@ public class StandaloneProfileUi : WindowMediatorSubscriberBase
             childFrame = childFrame with
             {
                 X = childFrame.X + (_adjustedForScrollBars ? ImGui.GetStyle().ScrollbarSize : 0),
-                Y = childFrame.Y / ImGuiHelpers.GlobalScale
+                Y = childFrame.Y / ImGuiHelpers.GlobalScale,
             };
             if (ImGui.BeginChildFrame(1000, childFrame))
             {
@@ -118,7 +118,12 @@ public class StandaloneProfileUi : WindowMediatorSubscriberBase
             {
                 UiSharedService.ColorText(note, ImGuiColors.DalamudGrey);
             }
-            string status = Pair.IsVisible ? "Visible" : (Pair.IsOnline ? "Online" : "Offline");
+            string status = Pair switch
+            {
+                { IsVisible: true } => "Visible",
+                { IsOnline: true } => "Online",
+                _ => "Offline",
+            };
             UiSharedService.ColorText(status, (Pair.IsVisible || Pair.IsOnline) ? ImGuiColors.HealerGreen : ImGuiColors.DalamudRed);
             if (Pair.IsVisible)
             {

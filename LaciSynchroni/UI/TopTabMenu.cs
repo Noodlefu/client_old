@@ -25,6 +25,7 @@ public class TopTabMenu
 
     private string _filter = string.Empty;
     private int _globalControlCountdown = 0;
+    private CancellationTokenSource? _countdownCts;
 
     private string _pairToAdd = string.Empty;
     private int _pairTabSelectedServer = 0;
@@ -48,7 +49,7 @@ public class TopTabMenu
         Individual,
         Syncshell,
         Filter,
-        UserConfig
+        UserConfig,
     }
 
     public string Filter
@@ -246,7 +247,7 @@ public class TopTabMenu
             }
         }
         UiSharedService.AttachToolTip("Globally resume or pause all individual pairs." + UiSharedService.TooltipSeparator
-            + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+            + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
 
         ImGui.SameLine();
         using (ImRaii.PushFont(UiBuilder.IconFont))
@@ -259,7 +260,7 @@ public class TopTabMenu
             }
         }
         UiSharedService.AttachToolTip("Globally enable or disable sound sync with all individual pairs."
-            + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+            + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
 
         ImGui.SameLine();
         using (ImRaii.PushFont(UiBuilder.IconFont))
@@ -272,7 +273,7 @@ public class TopTabMenu
             }
         }
         UiSharedService.AttachToolTip("Globally enable or disable animation sync with all individual pairs." + UiSharedService.TooltipSeparator
-            + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+            + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
 
         ImGui.SameLine();
         using (ImRaii.PushFont(UiBuilder.IconFont))
@@ -285,7 +286,7 @@ public class TopTabMenu
             }
         }
         UiSharedService.AttachToolTip("Globally enable or disable VFX sync with all individual pairs." + UiSharedService.TooltipSeparator
-            + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+            + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
 
 
         PopupIndividualSetting("Individual Pause", "Unpause all individuals", "Pause all individuals",
@@ -355,7 +356,7 @@ public class TopTabMenu
         }
         UiSharedService.AttachToolTip("Globally resume or pause all syncshells." + UiSharedService.TooltipSeparator
                         + "Note: This will not affect users with preferred permissions in syncshells."
-            + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+            + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
 
         ImGui.SameLine();
         using (ImRaii.PushFont(UiBuilder.IconFont))
@@ -369,7 +370,7 @@ public class TopTabMenu
         }
         UiSharedService.AttachToolTip("Globally enable or disable sound sync with all syncshells." + UiSharedService.TooltipSeparator
                         + "Note: This will not affect users with preferred permissions in syncshells."
-                        + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+                        + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
 
         ImGui.SameLine();
         using (ImRaii.PushFont(UiBuilder.IconFont))
@@ -383,7 +384,7 @@ public class TopTabMenu
         }
         UiSharedService.AttachToolTip("Globally enable or disable animation sync with all syncshells." + UiSharedService.TooltipSeparator
                         + "Note: This will not affect users with preferred permissions in syncshells."
-            + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+            + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
 
         ImGui.SameLine();
         using (ImRaii.PushFont(UiBuilder.IconFont))
@@ -397,7 +398,7 @@ public class TopTabMenu
         }
         UiSharedService.AttachToolTip("Globally enable or disable VFX sync with all syncshells." + UiSharedService.TooltipSeparator
                         + "Note: This will not affect users with preferred permissions in syncshells."
-            + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+            + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
 
 
         PopupSyncshellSetting("Syncshell Pause", "Unpause all syncshells", "Pause all syncshells",
@@ -475,12 +476,12 @@ public class TopTabMenu
             + "Note: If multiple users share one syncshell the permissions to that user will be set to " + Environment.NewLine
             + "the ones of the last applied syncshell in alphabetical order." + UiSharedService.TooltipSeparator
             + "Hold CTRL to enable this button"
-            + (_globalControlCountdown > 0 ? UiSharedService.TooltipSeparator + "Available again in " + _globalControlCountdown + " seconds." : string.Empty));
+            + (_globalControlCountdown > 0 ? $"{UiSharedService.TooltipSeparator}Available again in {_globalControlCountdown} seconds." : string.Empty));
     }
 
     private void DrawSyncshellMenu(float availableWidth, float spacingX)
     {
-        var buttonX = (availableWidth - (spacingX)) / 2f;
+        var buttonX = (availableWidth - spacingX) / 2f;
 
         if (_uiSharedService.IconTextButton(FontAwesomeIcon.Plus, "Create new Syncshell", buttonX))
         {
@@ -528,15 +529,25 @@ public class TopTabMenu
     private async Task GlobalControlCountdown(int countdown)
     {
 #if DEBUG
+        _globalControlCountdown = 0;
         return;
+#pragma warning disable CS0162 // Unreachable code detected
 #endif
 
+        await (_countdownCts?.CancelAsync() ?? Task.CompletedTask).ConfigureAwait(false);
+        var cts = _countdownCts = new CancellationTokenSource();
+
         _globalControlCountdown = countdown;
-        while (_globalControlCountdown > 0)
+        try
         {
-            await Task.Delay(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-            _globalControlCountdown--;
+            while (_globalControlCountdown > 0)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), cts.Token).ConfigureAwait(false);
+                _globalControlCountdown--;
+            }
         }
+        catch (OperationCanceledException) { }
+#pragma warning restore CS0162 // Unreachable code detected
     }
 
     private void PopupIndividualSetting(string popupTitle, string enableText, string disableText,

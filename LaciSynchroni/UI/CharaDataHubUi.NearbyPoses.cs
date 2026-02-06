@@ -104,7 +104,7 @@ internal partial class CharaDataHubUi
         int i = 0;
         foreach (var pose in _charaDataNearbyManager.NearbyData.OrderBy(v => v.Value.Distance))
         {
-            using var poseId = ImRaii.PushId("nearbyPose" + (i++));
+            using var poseId = ImRaii.PushId($"nearbyPose{i++}");
             var pos = ImGui.GetCursorPos();
             var circleDiameter = 60f;
             var circleOriginX = ImGui.GetWindowContentRegionMax().X - circleDiameter - pos.X;
@@ -113,7 +113,8 @@ internal partial class CharaDataHubUi
             UiSharedService.DrawGrouped(() =>
             {
                 string? userNote = _serverConfigurationManager.GetNoteForUid(_selectedServerIndex, pose.Key.MetaInfo.Uploader.UID);
-                var noteText = pose.Key.MetaInfo.IsOwnData ? "YOU" : (userNote == null ? pose.Key.MetaInfo.Uploader.AliasOrUID : $"{userNote} ({pose.Key.MetaInfo.Uploader.AliasOrUID})");
+                var uploaderText = userNote == null ? pose.Key.MetaInfo.Uploader.AliasOrUID : $"{userNote} ({pose.Key.MetaInfo.Uploader.AliasOrUID})";
+                var noteText = pose.Key.MetaInfo.IsOwnData ? "YOU" : uploaderText;
                 ImGui.TextUnformatted("Pose by");
                 ImGui.SameLine();
                 UiSharedService.ColorText(noteText, ImGuiColors.ParsedGreen);
@@ -129,7 +130,7 @@ internal partial class CharaDataHubUi
                 UiSharedService.TextWrapped(pose.Key.Description ?? "No Pose Description was set", circleOriginX);
                 var posAfterGroup = ImGui.GetCursorPos();
                 var groupHeightCenter = (posAfterGroup.Y - pos.Y) / 2;
-                circleOffsetY = (groupHeightCenter - circleDiameter / 2);
+                circleOffsetY = groupHeightCenter - circleDiameter / 2;
                 if (circleOffsetY < 0) circleOffsetY = 0;
                 ImGui.SetCursorPos(new Vector2(circleOriginX, pos.Y));
                 ImGui.Dummy(new Vector2(circleDiameter, circleDiameter));
@@ -200,7 +201,7 @@ internal partial class CharaDataHubUi
         {
             if (_uiSharedService.IconTextButton(FontAwesomeIcon.ArrowCircleDown, "Update Data Shared With You"))
             {
-                _ = _charaDataManager.GetAllSharedData(_disposalCts.Token).ContinueWith(u => UpdateFilteredItems());
+                _ = _charaDataManager.GetAllSharedData(_disposalCts.Token).ContinueWith(_ => UpdateFilteredItems(), _disposalCts.Token);
             }
         }
         if (_charaDataManager.GetSharedWithYouTimeoutTask != null && !_charaDataManager.GetSharedWithYouTimeoutTask.IsCompleted)

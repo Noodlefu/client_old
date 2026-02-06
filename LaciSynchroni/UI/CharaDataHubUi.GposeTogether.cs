@@ -203,7 +203,7 @@ internal sealed partial class CharaDataHubUi
             ImGui.TextUnformatted("Users In Lobby");
             var gposeCharas = _dalamudUtilService.GetGposeCharactersFromObjectTable();
             var self = _dalamudUtilService.GetPlayerCharacter();
-            gposeCharas = gposeCharas.Where(c => c != null && !string.Equals(c.Name.TextValue, self.Name.TextValue, StringComparison.Ordinal)).ToList();
+            gposeCharas = [.. gposeCharas.Where(c => c != null && !string.Equals(c.Name.TextValue, self.Name.TextValue, StringComparison.Ordinal))];
 
             using (ImRaii.Child("charaChild", new(0, 0), false, ImGuiWindowFlags.AlwaysAutoResize))
             {
@@ -229,7 +229,7 @@ internal sealed partial class CharaDataHubUi
     {
         using var id = ImRaii.PushId(user.UserData.UID);
         using var indent = ImRaii.PushIndent(5f);
-        var sameMapAndServer = _charaDataGposeTogetherManager.IsOnSameMapAndServer(user);
+        var (SameMap, SameServer, SameEverything) = _charaDataGposeTogetherManager.IsOnSameMapAndServer(user);
         var width = ImGui.GetContentRegionAvail().X - 5;
         UiSharedService.DrawGrouped(() =>
         {
@@ -252,7 +252,7 @@ internal sealed partial class CharaDataHubUi
             }
             UiSharedService.AttachToolTip("Apply newly received character data to selected actor." + UiSharedService.TooltipSeparator + "Note: If the button is grayed out, the latest data has already been applied.");
             ImGui.SameLine();
-            using (ImRaii.Disabled(!_uiSharedService.IsInGpose || user.CharaData == null || sameMapAndServer.SameEverything))
+            using (ImRaii.Disabled(!_uiSharedService.IsInGpose || user.CharaData == null || SameEverything))
             {
                 if (_uiSharedService.IconButton(FontAwesomeIcon.Plus))
                 {
@@ -272,23 +272,23 @@ internal sealed partial class CharaDataHubUi
             UiSharedService.AttachToolTip(user.WorldDataDescriptor + UiSharedService.TooltipSeparator);
 
             ImGui.SameLine();
-            _uiSharedService.IconText(FontAwesomeIcon.Map, sameMapAndServer.SameMap ? ImGuiColors.ParsedGreen : ImGuiColors.DalamudRed);
+            _uiSharedService.IconText(FontAwesomeIcon.Map, SameMap ? ImGuiColors.ParsedGreen : ImGuiColors.DalamudRed);
             if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && user.WorldData != null)
             {
                 _dalamudUtilService.SetMarkerAndOpenMap(new(user.WorldData.Value.PositionX, user.WorldData.Value.PositionY, user.WorldData.Value.PositionZ), user.Map);
             }
-            UiSharedService.AttachToolTip((sameMapAndServer.SameMap ? "You are on the same map." : "You are not on the same map.") + UiSharedService.TooltipSeparator
+            UiSharedService.AttachToolTip((SameMap ? "You are on the same map." : "You are not on the same map.") + UiSharedService.TooltipSeparator
                 + "Note: Click to open the users location on your map." + Environment.NewLine
                 + "Note: For GPose synchronization to work properly, you must be on the same map.");
 
             ImGui.SameLine();
-            _uiSharedService.IconText(FontAwesomeIcon.Globe, sameMapAndServer.SameServer ? ImGuiColors.ParsedGreen : ImGuiColors.DalamudRed);
-            UiSharedService.AttachToolTip((sameMapAndServer.SameMap ? "You are on the same server." : "You are not on the same server.") + UiSharedService.TooltipSeparator
+            _uiSharedService.IconText(FontAwesomeIcon.Globe, SameServer ? ImGuiColors.ParsedGreen : ImGuiColors.DalamudRed);
+            UiSharedService.AttachToolTip((SameMap ? "You are on the same server." : "You are not on the same server.") + UiSharedService.TooltipSeparator
                 + "Note: GPose synchronization is not dependent on the current server, but you will have to spawn a character for the other lobby users.");
 
             ImGui.SameLine();
-            _uiSharedService.IconText(FontAwesomeIcon.Running, sameMapAndServer.SameEverything ? ImGuiColors.ParsedGreen : ImGuiColors.DalamudRed);
-            UiSharedService.AttachToolTip(sameMapAndServer.SameEverything ? "You are in the same instanced area." : "You are not the same instanced area." + UiSharedService.TooltipSeparator +
+            _uiSharedService.IconText(FontAwesomeIcon.Running, SameEverything ? ImGuiColors.ParsedGreen : ImGuiColors.DalamudRed);
+            UiSharedService.AttachToolTip(SameEverything ? "You are in the same instanced area." : "You are not the same instanced area." + UiSharedService.TooltipSeparator +
                 "Note: Users not in your instance, but on the same map, will be drawn as floating wisps." + Environment.NewLine
                 + "Note: GPose synchronization is not dependent on the current instance, but you will have to spawn a character for the other lobby users.");
 
