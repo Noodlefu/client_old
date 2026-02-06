@@ -305,10 +305,9 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
     {
         _serverState = ServerState.Disconnecting;
 
-        _logger.LogInformation("Stopping existing connection to {ServerName}", ServerToUse.ServerName);
-
         if (_connection != null && !_isDisposed)
         {
+            _logger.LogInformation("Stopping existing connection to {ServerName}", ServerToUse.ServerName);
             _logger.LogDebug("Disposing current HubConnection");
             _isDisposed = true;
 
@@ -532,11 +531,8 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
             var token = await _multiConnectTokenService.GetOrUpdateToken(ServerIndex, ct).ConfigureAwait(false);
             if (!string.Equals(token, _lastUsedToken, StringComparison.Ordinal))
             {
-                Logger.LogDebug("Reconnecting due to updated token");
-
-                _doNotNotifyOnNextInfo = true;
-                await CreateConnectionsAsync().ConfigureAwait(false);
-                requireReconnect = true;
+                Logger.LogDebug("Token renewed for {ServerName}, will be used on next request", ServerToUse.ServerName);
+                _lastUsedToken = token;
             }
         }
         catch (SyncAuthFailureException ex)
