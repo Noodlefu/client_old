@@ -31,7 +31,7 @@ public record GposeStartMessage : SameThreadMessage;
 public record GposeEndMessage : MessageBase;
 public record CutsceneEndMessage : MessageBase;
 public record CutsceneFrameworkUpdateMessage : SameThreadMessage;
-public record ConnectedMessage(ConnectionDto Connection, int serverIndex) : MessageBase;
+public record ConnectedMessage(ConnectionDto Connection, int ServerIndex) : MessageBase;
 public record DisconnectedMessage(int ServerIndex) : SameThreadMessage;
 public record PenumbraModSettingChangedMessage : MessageBase;
 public record PenumbraInitializedMessage : MessageBase;
@@ -92,5 +92,7 @@ public record GPoseLobbyReceiveCharaData(int ServerIndex, CharaDataDownloadDto C
 public record GPoseLobbyReceivePoseData(UserData UserData, PoseData PoseData) : MessageBase;
 public record GPoseLobbyReceiveWorldData(UserData UserData, WorldData WorldData) : MessageBase;
 public record OpenCharaDataHubWithFilterMessage(UserData UserData) : MessageBase;
+public record ServerJoinRequestMessage(ServerStorage ServerStorage) : MessageBase;
+public record HttpServerToggleMessage(bool enable) : MessageBase;
 #pragma warning restore S2094
 #pragma warning restore MA0048 // File name must match type name

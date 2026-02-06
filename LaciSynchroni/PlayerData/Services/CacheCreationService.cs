@@ -94,7 +94,7 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
         {
             if (_isZoning) return;
             var changedType = _playerRelatedObjects.FirstOrDefault(f => f.Value.Address == msg.Address);
-            if (!default(KeyValuePair<ObjectKind, GameObjectHandler>).Equals(changedType))
+            if (changedType.Value != null)
             {
                 Logger.LogDebug("Received GlamourerChangedMessage for {kind}", changedType);
                 AddCacheToCreate(changedType.Key);
@@ -115,7 +115,7 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
         {
             if (_isZoning) return;
             var changedType = _playerRelatedObjects.FirstOrDefault(f => f.Value.Address == msg.Address);
-            if (!default(KeyValuePair<ObjectKind, GameObjectHandler>).Equals(changedType) && changedType.Key == ObjectKind.Player)
+            if (changedType.Value != null && changedType.Key == ObjectKind.Player)
             {
                 Logger.LogDebug("Received Moodles change, updating player");
                 AddCacheToCreate(ObjectKind.Player);
@@ -176,7 +176,7 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
             }
             _debouncedObjectCache.Clear();
             _cacheCreateLock.Release();
-        });
+        }, token);
     }
 
     private void ProcessCacheCreation()
@@ -240,6 +240,6 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
             {
                 Logger.LogDebug("Cache Creation complete");
             }
-        });
+        }, _runtimeCts.Token);
     }
 }

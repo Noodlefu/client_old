@@ -6,41 +6,26 @@ using LaciSynchroni.Common.Dto.CharaData;
 using LaciSynchroni.FileCache;
 using LaciSynchroni.PlayerData.Factories;
 using LaciSynchroni.PlayerData.Handlers;
-using LaciSynchroni.Services.CharaData;
 using LaciSynchroni.Services.CharaData.Models;
 using LaciSynchroni.Services.ServerConfiguration;
 using LaciSynchroni.Utils;
 using LaciSynchroni.WebAPI.Files;
 using Microsoft.Extensions.Logging;
 
-namespace LaciSynchroni.Services;
+namespace LaciSynchroni.Services.CharaData;
 
-public sealed class CharaDataFileHandler : IDisposable
+public sealed class CharaDataFileHandler(ILogger<CharaDataFileHandler> logger, FileDownloadManagerFactory fileDownloadManagerFactory, FileUploadManager fileUploadManager, FileCacheManager fileCacheManager,
+        DalamudUtilService dalamudUtilService, GameObjectHandlerFactory gameObjectHandlerFactory, PlayerDataFactory playerDataFactory) : IDisposable
 {
-    private readonly DalamudUtilService _dalamudUtilService;
-    private readonly FileCacheManager _fileCacheManager;
-    private readonly FileDownloadManager _fileDownloadManager;
-    private readonly FileUploadManager _fileUploadManager;
-    private readonly GameObjectHandlerFactory _gameObjectHandlerFactory;
-    private readonly ILogger<CharaDataFileHandler> _logger;
-    private readonly CharaFileDataFactory _charaFileDataFactory;
-    private readonly PlayerDataFactory _playerDataFactory;
-    private readonly ServerConfigurationManager _serverConfiguration;
+    private readonly DalamudUtilService _dalamudUtilService = dalamudUtilService;
+    private readonly FileCacheManager _fileCacheManager = fileCacheManager;
+    private readonly FileDownloadManager _fileDownloadManager = fileDownloadManagerFactory.Create();
+    private readonly FileUploadManager _fileUploadManager = fileUploadManager;
+    private readonly GameObjectHandlerFactory _gameObjectHandlerFactory = gameObjectHandlerFactory;
+    private readonly ILogger<CharaDataFileHandler> _logger = logger;
+    private readonly CharaFileDataFactory _charaFileDataFactory = new(fileCacheManager);
+    private readonly PlayerDataFactory _playerDataFactory = playerDataFactory;
     private int _globalFileCounter = 0;
-
-    public CharaDataFileHandler(ILogger<CharaDataFileHandler> logger, FileDownloadManagerFactory fileDownloadManagerFactory, FileUploadManager fileUploadManager, FileCacheManager fileCacheManager,
-            DalamudUtilService dalamudUtilService, GameObjectHandlerFactory gameObjectHandlerFactory, PlayerDataFactory playerDataFactory, ServerConfigurationManager serverConfiguration)
-    {
-        _fileDownloadManager = fileDownloadManagerFactory.Create();
-        _logger = logger;
-        _fileUploadManager = fileUploadManager;
-        _fileCacheManager = fileCacheManager;
-        _dalamudUtilService = dalamudUtilService;
-        _gameObjectHandlerFactory = gameObjectHandlerFactory;
-        _playerDataFactory = playerDataFactory;
-        _serverConfiguration = serverConfiguration;
-        _charaFileDataFactory = new(fileCacheManager);
-    }
 
     public void ComputeMissingFiles(CharaDataDownloadDto charaDataDownloadDto, out Dictionary<string, string> modPaths, out List<FileReplacementData> missingFiles)
     {
@@ -69,11 +54,11 @@ public sealed class CharaDataFileHandler : IDisposable
         }
 
         // Convert to FileReplacementData list
-        missingFiles = missingFilesByHash.Select(kvp => new FileReplacementData
+        missingFiles = [.. missingFilesByHash.Select(kvp => new FileReplacementData
         {
             Hash = kvp.Key,
-            GamePaths = [.. kvp.Value]
-        }).ToList();
+            GamePaths = [.. kvp.Value],
+        }),];
 
         foreach (var swap in charaDataDownloadDto.FileSwaps)
         {
@@ -281,14 +266,11 @@ public sealed class CharaDataFileHandler : IDisposable
                     _logger.LogDebug("\t{path}", path);
                 }
 
-                var fsRead = File.OpenRead(file.ResolvedFilepath);
-                await using (fsRead.ConfigureAwait(false))
-                {
-                    using var br = new BinaryReader(fsRead);
-                    byte[] buffer = new byte[item.Length];
-                    br.Read(buffer, 0, item.Length);
-                    writer.Write(buffer);
-                }
+                using var fsRead = File.OpenRead(file.ResolvedFilepath);
+                using var br = new BinaryReader(fsRead);
+                byte[] buffer = new byte[item.Length];
+                br.Read(buffer, 0, item.Length);
+                writer.Write(buffer);
             }
             writer.Flush();
             await lz4.FlushAsync().ConfigureAwait(false);

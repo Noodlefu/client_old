@@ -10,7 +10,9 @@ using static Lumina.Data.Files.TexFile.TextureFormat;
 
 namespace LaciSynchroni.Services;
 
+#pragma warning disable S2930 // _baseAnalysisCts is disposed via CancelRecreate/CancelDispose extension methods
 public sealed class CharacterAnalyzer : MediatorSubscriberBase, IDisposable
+#pragma warning restore S2930
 {
     // These are all already compressed textures. BC1 = DXT1 and so on, same format, different name
     private static readonly HashSet<TexFile.TextureFormat> ConversionForbiddenFormats =
@@ -24,7 +26,7 @@ public sealed class CharacterAnalyzer : MediatorSubscriberBase, IDisposable
         BC7,
         Null,
     ];
-    
+
     private readonly FileCacheManager _fileCacheManager;
     private readonly XivDataAnalyzer _xivDataAnalyzer;
     private CancellationTokenSource? _analysisCts;
@@ -111,6 +113,7 @@ public sealed class CharacterAnalyzer : MediatorSubscriberBase, IDisposable
     public void Dispose()
     {
         _analysisCts.CancelDispose();
+        _baseAnalysisCts.CancelDispose();
     }
 
     private async Task BaseAnalysis(CharacterData charaData, CancellationToken token)
@@ -207,8 +210,8 @@ public sealed class CharacterAnalyzer : MediatorSubscriberBase, IDisposable
             UiSharedService.ByteToString(LastAnalysis.Values.Sum(c => c.Values.Sum(v => v.CompressedSize))));
         Logger.LogInformation("IMPORTANT NOTES:\n\r- For Laci Synchroni uploads and downloads, only the compressed size is relevant.\n\r- An unusually high total files count beyond 200 and up will also increase your download time to others significantly.");
     }
-            
-        
+
+
     internal sealed record FileDataEntry(string Hash, string FileType, List<string> GamePaths, List<string> FilePaths, long OriginalSize, long CompressedSize, long Triangles)
     {
         public bool IsComputed => OriginalSize > 0 && CompressedSize > 0;
@@ -258,7 +261,7 @@ public sealed class CharacterAnalyzer : MediatorSubscriberBase, IDisposable
         {
             return FileType.Equals("tex", StringComparison.OrdinalIgnoreCase);
         }
-        
+
         public bool IsTextureConversionAllowed()
         {
             if (!IsTexture())

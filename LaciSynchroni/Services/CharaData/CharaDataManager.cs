@@ -18,7 +18,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using ObjectKind = Dalamud.Game.ClientState.Objects.Enums.ObjectKind;
 
-namespace LaciSynchroni.Services;
+namespace LaciSynchroni.Services.CharaData;
 
 public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
 {
@@ -65,13 +65,13 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
         _serverConfig = serverConfig;
         syncMediator.Subscribe<ConnectedMessage>(this, (msg) =>
         {
-            if (msg.serverIndex != _dataServerIndex)
+            if (msg.ServerIndex != _dataServerIndex)
             {
                 // Don't do anything if an unrelated server connected
                 return;
             }
             var token = _connectCts.Token;
-            _ = SelectServer(msg.serverIndex, token, _configService.Current.DownloadMcdDataOnConnection);
+            _ = SelectServer(msg.ServerIndex, token, _configService.Current.DownloadMcdDataOnConnection);
         });
         syncMediator.Subscribe<DisconnectedMessage>(this, (msg) =>
         {
@@ -126,7 +126,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             };
 
             await DownloadAndAplyDataAsync(serverIndex, charaName, dataDownloadDto, metaInfo, false).ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 
     public Task ApplyCharaData(int serverIndex, CharaDataMetaInfoDto dataMetaInfoDto, string charaName)
@@ -143,7 +143,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             }
 
             await DownloadAndAplyDataAsync(serverIndex, charaName, download, dataMetaInfoDto, false).ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 
     public Task ApplyCharaDataToGposeTarget(int serverIndex, CharaDataMetaInfoDto dataMetaInfoDto)
@@ -155,7 +155,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             if (string.IsNullOrEmpty(charaName)) return;
 
             await ApplyCharaData(serverIndex, dataMetaInfoDto, charaName).ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 
     public async Task ApplyOwnDataToGposeTarget(int serverIndex, CharaDataFullExtendedDto dataDto)
@@ -196,7 +196,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             if (string.IsNullOrEmpty(poseJson)) return;
 
             await _ipcManager.Brio.SetPoseAsync(gposeChara.Address, poseJson).ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 
     public Task ApplyPoseDataToGPoseTarget(PoseEntry pose)
@@ -209,7 +209,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             {
                 await ApplyPoseData(pose, apply.TargetName).ConfigureAwait(false);
             }
-        });
+        }, _applicationCts.Token);
     }
 
     public Task ApplyWorldDataToTarget(PoseEntry pose, string targetName)
@@ -226,7 +226,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             Logger.LogDebug("Applying World data {data}", pose.WorldData);
 
             await _ipcManager.Brio.ApplyTransformAsync(gposeChara.Address, pose.WorldData.Value).ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 
     public Task ApplyWorldDataToGPoseTarget(PoseEntry pose)
@@ -238,7 +238,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             {
                 await ApplyPoseData(pose, apply.TargetName).ConfigureAwait(false);
             }
-        });
+        }, _applicationCts.Token);
     }
 
     public void AttachWorldData(PoseEntry pose, CharaDataExtendedUpdateDto updateDto)
@@ -264,7 +264,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             pose.WorldData = worldData;
 
             updateDto.UpdatePoseList();
-        });
+        }, _applicationCts.Token);
     }
 
     public async Task<(bool CanApply, string TargetName)> CanApplyInGpose()
@@ -305,7 +305,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
                 using var ct = CancellationTokenSource.CreateLinkedTokenSource(_charaDataCreateCts.Token, cancelToken);
                 await Task.Delay(TimeSpan.FromSeconds(10), ct.Token).ConfigureAwait(false);
                 DataCreationTask = null;
-            });
+            }, cancelToken);
 
 
             if (result == null)
@@ -314,7 +314,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             await AddOrUpdateDto(result).ConfigureAwait(false);
 
             return ("Created Character Data", true);
-        });
+        }, cancelToken);
     }
 
     public async Task DeleteCharaData(int serverIndex, CharaDataFullExtendedDto dto)
@@ -411,11 +411,11 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
 #else
                     await Task.Delay(TimeSpan.FromSeconds(5), ct.Token).ConfigureAwait(false);
 #endif
-                });
+                }, cancelToken);
             }
 
             return result.OrderBy(u => u.CreatedDate).Select(k => new CharaDataFullExtendedDto(k)).ToList();
-        });
+        }, cancelToken);
 
         var result = await GetAllDataTask.ConfigureAwait(false);
         foreach (var item in result)
@@ -448,7 +448,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
 #endif
             GetSharedWithYouTimeoutTask = null;
             Logger.LogDebug("Finished Shared with You Data Timeout");
-        });
+        }, token);
 
         var result = await GetSharedWithYouTask.ConfigureAwait(false);
         foreach (var grouping in result.GroupBy(r => r.Uploader))
@@ -537,7 +537,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
                     File.Delete(file);
                 }
             }
-        });
+        }, _applicationCts.Token);
     }
 
     public async Task McdfApplyToGposeTarget()
@@ -579,7 +579,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             await ApplyCharaData(serverIndex, charaDataDownloadDto, newActor.Name.TextValue).ConfigureAwait(false);
 
             return _characterHandler.HandledCharaData.FirstOrDefault(f => string.Equals(f.Name, newActor.Name.TextValue, StringComparison.Ordinal));
-        });
+        }, _applicationCts.Token);
         UiBlockingComputation = task;
         return task;
     }
@@ -595,7 +595,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             await ApplyCharaData(serverIndex, charaDataMetaInfoDto, newActor.Name.TextValue).ConfigureAwait(false);
 
             return _characterHandler.HandledCharaData.FirstOrDefault(f => string.Equals(f.Name, newActor.Name.TextValue, StringComparison.Ordinal));
-        });
+        }, _applicationCts.Token);
         UiBlockingComputation = task;
         return task;
     }
@@ -655,7 +655,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
                 CharaUpdateTask = CharaUpdateAsync(serverIndex, updateDto);
                 await CharaUpdateTask.ConfigureAwait(false);
             }
-        });
+        }, _uploadCts.Token);
     }
 
     public void UploadCharaData(int serverIndex, string id)
@@ -756,7 +756,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             var compressedByteData = LZ4Wrapper.WrapHC(Encoding.UTF8.GetBytes(poseData));
             pose.PoseData = Convert.ToBase64String(compressedByteData);
             updateDto.UpdatePoseList();
-        });
+        }, _applicationCts.Token);
     }
 
     internal void McdfSpawnApplyToGposeTarget()
@@ -768,11 +768,11 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             await Task.Delay(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
             unsafe
             {
-                _dalamudUtilService.GposeTarget = (GameObject*)newActor.Address;
+                DalamudUtilService.GposeTarget = (GameObject*)newActor.Address;
             }
 
             await McdfApplyToGposeTarget().ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 
     internal void ApplyFullPoseDataToTarget(PoseEntry value, string targetName)
@@ -781,7 +781,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
         {
             await ApplyPoseData(value, targetName).ConfigureAwait(false);
             await ApplyWorldDataToTarget(value, targetName).ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 
     internal void ApplyFullPoseDataToGposeTarget(PoseEntry value)
@@ -794,7 +794,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
                 await ApplyPoseData(value, apply.TargetName).ConfigureAwait(false);
                 await ApplyWorldDataToTarget(value, apply.TargetName).ConfigureAwait(false);
             }
-        });
+        }, _applicationCts.Token);
     }
 
     internal void SpawnAndApplyWorldTransform(int serverIndex, CharaDataMetaInfoDto metaInfo, PoseEntry value)
@@ -805,7 +805,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             if (actor == null) return;
             await ApplyPoseData(value, actor.Name).ConfigureAwait(false);
             await ApplyWorldDataToTarget(value, actor.Name).ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 
     internal unsafe void TargetGposeActor(HandledCharaDataEntry actor)
@@ -813,7 +813,7 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
         var gposeActor = _dalamudUtilService.GetGposeCharacterFromObjectTableByName(actor.Name, true);
         if (gposeActor != null)
         {
-            _dalamudUtilService.GposeTarget = (GameObject*)gposeActor.Address;
+            DalamudUtilService.GposeTarget = (GameObject*)gposeActor.Address;
         }
     }
 
@@ -1060,6 +1060,6 @@ public sealed partial class CharaDataManager : DisposableMediatorSubscriberBase
             var gposeChara = await _dalamudUtilService.GetGposeCharacterFromObjectTableByNameAsync(handledActor, true).ConfigureAwait(false);
             if (gposeChara != null)
                 await _ipcManager.Brio.DespawnActorAsync(gposeChara.Address).ConfigureAwait(false);
-        });
+        }, _applicationCts.Token);
     }
 }

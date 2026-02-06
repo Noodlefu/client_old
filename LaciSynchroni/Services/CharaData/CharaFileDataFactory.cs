@@ -4,14 +4,9 @@ using LaciSynchroni.Services.CharaData.Models;
 
 namespace LaciSynchroni.Services.CharaData;
 
-public sealed class CharaFileDataFactory
+public sealed class CharaFileDataFactory(FileCacheManager fileCacheManager)
 {
-    private readonly FileCacheManager _fileCacheManager;
-
-    public CharaFileDataFactory(FileCacheManager fileCacheManager)
-    {
-        _fileCacheManager = fileCacheManager;
-    }
+    private readonly FileCacheManager _fileCacheManager = fileCacheManager;
 
     public CharaFileData Create(string description, CharacterData characterCacheDto)
     {

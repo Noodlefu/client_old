@@ -10,14 +10,14 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
     public CharaDataExtendedUpdateDto(CharaDataUpdateDto dto, CharaDataFullDto charaDataFullDto) : base(dto)
     {
         _charaDataFullDto = charaDataFullDto;
-        _userList = charaDataFullDto.AllowedUsers.ToList();
-        _groupList = charaDataFullDto.AllowedGroups.ToList();
-        _poseList = charaDataFullDto.PoseData.Select(k => new PoseEntry(k.Id)
+        _userList = [.. charaDataFullDto.AllowedUsers];
+        _groupList = [.. charaDataFullDto.AllowedGroups];
+        _poseList = [.. charaDataFullDto.PoseData.Select(k => new PoseEntry(k.Id)
         {
             Description = k.Description,
             PoseData = k.PoseData,
-            WorldData = k.WorldData
-        }).ToList();
+            WorldData = k.WorldData,
+        }),];
     }
 
     public CharaDataUpdateDto BaseDto => new(Id)
@@ -33,7 +33,7 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         GlamourerData = base.GlamourerData,
         ShareType = base.ShareType,
         ManipulationData = base.ManipulationData,
-        Poses = Poses
+        Poses = Poses,
     };
 
     public new string ManipulationData
@@ -310,7 +310,7 @@ public sealed record CharaDataExtendedUpdateDto : CharaDataUpdateDto
         {
             Description = k.Description,
             PoseData = k.PoseData,
-            WorldData = k.WorldData
+            WorldData = k.WorldData,
         }));
     }
 

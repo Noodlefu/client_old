@@ -4,14 +4,11 @@ using System.Text;
 namespace LaciSynchroni.Utils;
 
 [InterpolatedStringHandler]
-public readonly ref struct CustomInterpolatedStringHandler
+#pragma warning disable CS9113 // Parameter 'formattedCount' is required by InterpolatedStringHandler contract
+public readonly ref struct CustomInterpolatedStringHandler(int literalLength, int formattedCount)
+#pragma warning restore CS9113
 {
-    readonly StringBuilder _logMessageStringbuilder;
-
-    public CustomInterpolatedStringHandler(int literalLength, int formattedCount)
-    {
-        _logMessageStringbuilder = new StringBuilder(literalLength);
-    }
+    readonly StringBuilder _logMessageStringbuilder = new(literalLength);
 
     public void AppendLiteral(string s)
     {

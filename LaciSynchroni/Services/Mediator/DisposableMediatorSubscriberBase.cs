@@ -2,11 +2,8 @@
 
 namespace LaciSynchroni.Services.Mediator;
 
-public abstract class DisposableMediatorSubscriberBase : MediatorSubscriberBase, IDisposable
+public abstract class DisposableMediatorSubscriberBase(ILogger logger, SyncMediator mediator) : MediatorSubscriberBase(logger, mediator), IDisposable
 {
-    protected DisposableMediatorSubscriberBase(ILogger logger, SyncMediator mediator) : base(logger, mediator)
-    {
-    }
 
     public void Dispose()
     {

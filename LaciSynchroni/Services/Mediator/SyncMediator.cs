@@ -11,33 +11,26 @@ using System.Threading.Channels;
 
 namespace LaciSynchroni.Services.Mediator;
 
-public sealed class SyncMediator : IHostedService
+public sealed class SyncMediator(ILogger<SyncMediator> logger, PerformanceCollectorService performanceCollector, SyncConfigService syncConfigService,
+    BackgroundTaskTracker taskTracker) : IHostedService
 {
     private readonly Lock _addRemoveLock = new();
-    private readonly BackgroundTaskTracker _taskTracker;
+    private readonly BackgroundTaskTracker _taskTracker = taskTracker;
     private readonly ConcurrentDictionary<object, DateTime> _lastErrorTime = [];
-    private readonly ILogger<SyncMediator> _logger;
+    private readonly ILogger<SyncMediator> _logger = logger;
     private readonly CancellationTokenSource _loopCts = new();
     private readonly Channel<MessageBase> _messageChannel = Channel.CreateUnbounded<MessageBase>(new UnboundedChannelOptions
     {
         SingleReader = true,
-        SingleWriter = false
+        SingleWriter = false,
     });
-    private readonly PerformanceCollectorService _performanceCollector;
-    private readonly SyncConfigService _syncConfigService;
+    private readonly PerformanceCollectorService _performanceCollector = performanceCollector;
+    private readonly SyncConfigService _syncConfigService = syncConfigService;
     private readonly ConcurrentDictionary<Type, HashSet<SubscriberAction>> _subscriberDict = [];
     /// <summary>Cached immutable snapshots of subscribers per message type, invalidated on subscribe/unsubscribe.</summary>
     private readonly ConcurrentDictionary<Type, ImmutableList<SubscriberAction>> _subscriberCache = [];
     private bool _processQueue = false;
     private readonly ConcurrentDictionary<Type, MethodInfo?> _genericExecuteMethods = new();
-    public SyncMediator(ILogger<SyncMediator> logger, PerformanceCollectorService performanceCollector, SyncConfigService syncConfigService,
-        BackgroundTaskTracker taskTracker)
-    {
-        _logger = logger;
-        _performanceCollector = performanceCollector;
-        _syncConfigService = syncConfigService;
-        _taskTracker = taskTracker;
-    }
 
     public void PrintSubscriberInfo()
     {
@@ -165,10 +158,9 @@ public sealed class SyncMediator : IHostedService
                 // Double-check after acquiring lock
                 if (!_subscriberCache.TryGetValue(msgType, out subscribersList))
                 {
-                    subscribersList = subscribers
+                    subscribersList = [.. subscribers
                         .Where(s => s.Subscriber != null)
-                        .OrderBy(k => k.Subscriber is IHighPriorityMediatorSubscriber ? 0 : 1)
-                        .ToImmutableList();
+                        .OrderBy(k => k.Subscriber is IHighPriorityMediatorSubscriber ? 0 : 1),];
                     _subscriberCache[msgType] = subscribersList;
                 }
             }
@@ -223,15 +215,10 @@ public sealed class SyncMediator : IHostedService
         _processQueue = true;
     }
 
-    private sealed class SubscriberAction
+    private sealed class SubscriberAction(IMediatorSubscriber subscriber, object action)
     {
-        public SubscriberAction(IMediatorSubscriber subscriber, object action)
-        {
-            Subscriber = subscriber;
-            Action = action;
-        }
 
-        public object Action { get; }
-        public IMediatorSubscriber Subscriber { get; }
+        public object Action { get; } = action;
+        public IMediatorSubscriber Subscriber { get; } = subscriber;
     }
 }

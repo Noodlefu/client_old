@@ -8,7 +8,7 @@ using LaciSynchroni.Common.Data.Extensions;
 using LaciSynchroni.Common.Dto.Group;
 using LaciSynchroni.Common.Dto.User;
 using LaciSynchroni.PlayerData.Pairs;
-using LaciSynchroni.Services;
+using LaciSynchroni.Services.CharaData;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.Services.ServerConfiguration;
 using LaciSynchroni.SyncConfiguration;

@@ -8,20 +8,14 @@ using System.Collections.Concurrent;
 
 namespace LaciSynchroni.Interop.Ipc;
 
-public class RedrawManager
+public class RedrawManager(SyncMediator syncMediator, DalamudUtilService dalamudUtil)
 {
-    private readonly SyncMediator _syncMediator;
-    private readonly DalamudUtilService _dalamudUtil;
+    private readonly SyncMediator _syncMediator = syncMediator;
+    private readonly DalamudUtilService _dalamudUtil = dalamudUtil;
     private readonly ConcurrentDictionary<nint, bool> _penumbraRedrawRequests = [];
     private CancellationTokenSource _disposalCts = new();
 
     public SemaphoreSlim RedrawSemaphore { get; init; } = new(2, 2);
-
-    public RedrawManager(SyncMediator syncMediator, DalamudUtilService dalamudUtil)
-    {
-        _syncMediator = syncMediator;
-        _dalamudUtil = dalamudUtil;
-    }
 
     public async Task PenumbraRedrawInternalAsync(ILogger logger, GameObjectHandler handler, Guid applicationId, Action<ICharacter> action, CancellationToken token)
     {

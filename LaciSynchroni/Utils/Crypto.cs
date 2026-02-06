@@ -48,21 +48,14 @@ public static class Crypto
     /// A simple bounded cache that evicts entries when the capacity is exceeded.
     /// Thread-safe for concurrent access.
     /// </summary>
-    private sealed class BoundedCache<TKey, TValue> where TKey : notnull
+    private sealed class BoundedCache<TKey, TValue>(int maxSize, IEqualityComparer<TKey>? comparer = null) where TKey : notnull
     {
-        private readonly ConcurrentDictionary<TKey, TValue> _cache;
-        private readonly ConcurrentQueue<TKey> _accessOrder;
-        private readonly int _maxSize;
-        private readonly Lock _evictionLock = new();
-
-        public BoundedCache(int maxSize, IEqualityComparer<TKey>? comparer = null)
-        {
-            _maxSize = maxSize;
-            _cache = comparer != null
+        private readonly ConcurrentDictionary<TKey, TValue> _cache = comparer != null
                 ? new ConcurrentDictionary<TKey, TValue>(comparer)
                 : new ConcurrentDictionary<TKey, TValue>();
-            _accessOrder = new ConcurrentQueue<TKey>();
-        }
+        private readonly ConcurrentQueue<TKey> _accessOrder = new();
+        private readonly int _maxSize = maxSize;
+        private readonly Lock _evictionLock = new();
 
         public bool TryGetValue(TKey key, out TValue? value)
         {

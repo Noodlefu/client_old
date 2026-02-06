@@ -92,7 +92,7 @@ public class LaciPlugin : MediatorSubscriberBase, IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _serverConfigurationManager.RemoveDeletedServers();
-        
+
         var pluginName = _dalamudUtil.GetPluginName();
         var version = Assembly.GetExecutingAssembly().GetName().Version!;
         var versionString = string.Create(CultureInfo.InvariantCulture, $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}");
@@ -100,7 +100,7 @@ public class LaciPlugin : MediatorSubscriberBase, IHostedService
         Mediator.Publish(new EventMessage(new Event(GetType().Name, EventSeverity.Informational,
             $"Starting {pluginName} {versionString}")));
 
-        Mediator.Subscribe<SwitchToMainUiMessage>(this, (msg) => { if (_launchTask == null || _launchTask.IsCompleted) _launchTask = Task.Run(WaitForPlayerAndLaunchCharacterManager); });
+        Mediator.Subscribe<SwitchToMainUiMessage>(this, (msg) => { if (_launchTask == null || _launchTask.IsCompleted) _launchTask = Task.Run(WaitForPlayerAndLaunchCharacterManager, cancellationToken); });
         Mediator.Subscribe<DalamudLoginMessage>(this, (_) => DalamudUtilOnLogIn());
         Mediator.Subscribe<DalamudLogoutMessage>(this, (_) => DalamudUtilOnLogOut());
 

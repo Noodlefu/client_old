@@ -1,11 +1,6 @@
 ﻿namespace LaciSynchroni.WebAPI.SignalR;
 
-public class SyncAuthFailureException : Exception
+public class SyncAuthFailureException(string reason) : Exception
 {
-    public SyncAuthFailureException(string reason)
-    {
-        Reason = reason;
-    }
-
-    public string Reason { get; }
+    public string Reason { get; } = reason;
 }

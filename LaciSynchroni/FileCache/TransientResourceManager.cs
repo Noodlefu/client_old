@@ -193,9 +193,7 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
 
         var transientResources = resources.ToList();
         Logger.LogDebug("Persisting {count} transient resources", transientResources.Count);
-        List<string> newlyAddedGamePaths = resources
-            .Except(semiTransientResources, StringComparer.Ordinal)
-            .ToList();
+        List<string> newlyAddedGamePaths = [.. resources.Except(semiTransientResources, StringComparer.Ordinal)];
         foreach (var gamePath in transientResources)
         {
             semiTransientResources.Add(gamePath);
@@ -377,11 +375,11 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
             SemiTransientResources[ObjectKind.Pet] = [.. petSpecificData ?? []];
         }
 
-        foreach (var kind in Enum.GetValues(typeof(ObjectKind)))
+        foreach (var kind in Enum.GetValues<ObjectKind>())
         {
             if (
-                !_cachedFrameAddresses.Any(k => k.Value == (ObjectKind)kind)
-                && TransientResources.Remove((ObjectKind)kind, out _)
+                !_cachedFrameAddresses.Any(k => k.Value == kind)
+                && TransientResources.Remove(kind, out _)
             )
             {
                 Logger.LogDebug("Object not present anymore: {kind}", kind.ToString());
@@ -398,7 +396,7 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
             {
                 Mediator.Publish(new TransientResourceChangedMessage(item.Address));
             }
-        });
+        }, CancellationToken.None);
     }
 
     public void RebuildSemiTransientResources()
@@ -521,22 +519,22 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
 
     private void SendTransients(nint gameObject, ObjectKind objectKind)
     {
+        _sendTransientCts?.Cancel();
+        _sendTransientCts?.Dispose();
+        _sendTransientCts = new();
+        var token = _sendTransientCts.Token;
         _ = Task.Run(async () =>
         {
-            _sendTransientCts?.Cancel();
-            _sendTransientCts?.Dispose();
-            _sendTransientCts = new();
-            var token = _sendTransientCts.Token;
             await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
             foreach (var kvp in TransientResources)
             {
-                if (TransientResources.TryGetValue(objectKind, out var values) && values.Any())
+                if (TransientResources.TryGetValue(objectKind, out var values) && values.Count != 0)
                 {
                     Logger.LogTrace("Sending Transients for {kind}", objectKind);
                     Mediator.Publish(new TransientResourceChangedMessage(gameObject));
                 }
             }
-        });
+        }, token);
     }
 
     public void StartRecording(CancellationToken token)
@@ -562,7 +560,7 @@ public sealed class TransientResourceManager : DisposableMediatorSubscriberBase
             {
                 IsTransientRecording = false;
             }
-        });
+        }, token);
     }
 
     public async Task WaitForRecording(CancellationToken token)

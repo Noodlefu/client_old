@@ -90,7 +90,7 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
         DrawObjectZero,
         RenderFlags,
         ModelInSlotLoaded,
-        ModelFilesInSlotLoaded
+        ModelFilesInSlotLoaded,
     }
 
     public IntPtr Address { get; private set; }
@@ -438,6 +438,6 @@ public sealed class GameObjectHandler : DisposableMediatorSubscriberBase, IHighP
                 Logger.LogDebug("[{this}] Delay after zoning complete", this);
                 _zoningCts.Dispose();
             }
-        });
+        }, _zoningCts.Token);
     }
 }

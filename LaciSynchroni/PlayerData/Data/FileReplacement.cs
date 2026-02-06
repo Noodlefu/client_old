@@ -3,21 +3,16 @@ using System.Text.RegularExpressions;
 
 namespace LaciSynchroni.PlayerData.Data;
 
-public partial class FileReplacement
+public partial class FileReplacement(string[] gamePaths, string filePath)
 {
-    public FileReplacement(string[] gamePaths, string filePath)
-    {
-        GamePaths = gamePaths.Select(g => g.Replace('\\', '/').ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
-        ResolvedPath = filePath.Replace('\\', '/');
-    }
 
-    public HashSet<string> GamePaths { get; init; }
+    public HashSet<string> GamePaths { get; init; } = gamePaths.Select(g => g.Replace('\\', '/').ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
 
     public bool HasFileReplacement => GamePaths.Count >= 1 && GamePaths.Any(p => !string.Equals(p, ResolvedPath, StringComparison.Ordinal));
 
     public string Hash { get; set; } = string.Empty;
     public bool IsFileSwap => !LocalPathRegex().IsMatch(ResolvedPath) && GamePaths.All(p => !LocalPathRegex().IsMatch(p));
-    public string ResolvedPath { get; init; }
+    public string ResolvedPath { get; init; } = filePath.Replace('\\', '/');
 
     public FileReplacementData ToFileReplacementDto()
     {

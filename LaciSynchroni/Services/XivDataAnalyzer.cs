@@ -13,20 +13,13 @@ using System.Text.RegularExpressions;
 
 namespace LaciSynchroni.Services;
 
-public sealed class XivDataAnalyzer
+public sealed class XivDataAnalyzer(ILogger<XivDataAnalyzer> logger, FileCacheManager fileCacheManager,
+    XivDataStorageService configService)
 {
-    private readonly ILogger<XivDataAnalyzer> _logger;
-    private readonly FileCacheManager _fileCacheManager;
-    private readonly XivDataStorageService _configService;
+    private readonly ILogger<XivDataAnalyzer> _logger = logger;
+    private readonly FileCacheManager _fileCacheManager = fileCacheManager;
+    private readonly XivDataStorageService _configService = configService;
     private readonly List<string> _failedCalculatedTris = [];
-
-    public XivDataAnalyzer(ILogger<XivDataAnalyzer> logger, FileCacheManager fileCacheManager,
-        XivDataStorageService configService)
-    {
-        _logger = logger;
-        _fileCacheManager = fileCacheManager;
-        _configService = configService;
-    }
 
     public unsafe Dictionary<string, List<ushort>>? GetSkeletonBoneIndices(GameObjectHandler handler)
     {
@@ -103,7 +96,7 @@ public sealed class XivDataAnalyzer
                 loadoptions->ClassNameRegistry = hkBuiltinTypeRegistry.Instance()->GetClassNameRegistry();
                 loadoptions->Flags = new hkFlags<hkSerializeUtil.LoadOptionBits, int>
                 {
-                    Storage = (int)hkSerializeUtil.LoadOptionBits.Default
+                    Storage = (int)hkSerializeUtil.LoadOptionBits.Default,
                 };
 
                 var resource = hkSerializeUtil.LoadFromBuffer(havokDataPtr, havokData.Length, null, loadoptions);
@@ -291,7 +284,7 @@ public sealed class XivDataAnalyzer
     /// Creates a precomputed validation context for efficient repeated bone checks.
     /// Call this once per character, then reuse for all PAP files.
     /// </summary>
-    public BoneValidationContext CreateValidationContext(Dictionary<string, List<ushort>> localBoneBuckets)
+    public static BoneValidationContext CreateValidationContext(Dictionary<string, List<ushort>> localBoneBuckets)
     {
         return new BoneValidationContext(localBoneBuckets);
     }
@@ -353,12 +346,9 @@ public sealed class XivDataAnalyzer
                     continue;
 
                 // Tolerance checks
-                if (checkShiftTolerance || checkNeighborTolerance)
-                {
-                    if (targetBucket.Contains((ushort)(papBoneIdx + 1)) ||
-                        (papBoneIdx > 0 && targetBucket.Contains((ushort)(papBoneIdx - 1))))
-                        continue;
-                }
+                if ((checkShiftTolerance || checkNeighborTolerance) && (targetBucket.Contains((ushort)(papBoneIdx + 1)) ||
+                        (papBoneIdx > 0 && targetBucket.Contains((ushort)(papBoneIdx - 1)))))
+                    continue;
 
                 // Range fallback for Safe mode
                 if (checkRangeFallback && papBoneIdx <= maxLocalBone)

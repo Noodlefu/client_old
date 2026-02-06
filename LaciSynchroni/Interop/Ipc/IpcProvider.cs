@@ -2,7 +2,7 @@
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using LaciSynchroni.PlayerData.Handlers;
-using LaciSynchroni.Services;
+using LaciSynchroni.Services.CharaData;
 using LaciSynchroni.Services.Mediator;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -87,6 +87,6 @@ public class IpcProvider : IHostedService, IMediatorSubscriber
 
     private List<nint> GetHandledAddresses()
     {
-        return _activeGameObjectHandlers.Where(g => g.Address != nint.Zero).Select(g => g.Address).Distinct().ToList();
+        return [.. _activeGameObjectHandlers.Where(g => g.Address != nint.Zero).Select(g => g.Address).Distinct()];
     }
 }

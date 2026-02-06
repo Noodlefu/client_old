@@ -1,4 +1,4 @@
-﻿namespace LaciSynchroni.PlayerData.Pairs;
+﻿namespace LaciSynchroni.PlayerData.Data;
 
 public enum PlayerChanges
 {

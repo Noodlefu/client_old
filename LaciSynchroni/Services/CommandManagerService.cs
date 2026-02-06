@@ -46,7 +46,7 @@ public sealed class CommandManagerService : IDisposable
                           Environment.NewLine +
                           $"\t {CommandName} gpose - Opens the {PluginNameShort} Character Data Hub window" + Environment.NewLine +
                           $"\t {CommandName} analyze - Opens the {PluginNameShort} Character Data Analysis window" + Environment.NewLine +
-                          $"\t {CommandName} settings - Opens the {PluginNameShort} Settings window"
+                          $"\t {CommandName} settings - Opens the {PluginNameShort} Settings window",
         });
     }
 
@@ -109,7 +109,7 @@ public sealed class CommandManagerService : IDisposable
         }
         else if (string.Equals(splitArgs[0], "servertest", StringComparison.OrdinalIgnoreCase))
         {
-            _mediator.Publish(new UiToggleMessage(typeof(LaciServerTesterUi))); 
+            _mediator.Publish(new UiToggleMessage(typeof(LaciServerTesterUi)));
         }
     }
 

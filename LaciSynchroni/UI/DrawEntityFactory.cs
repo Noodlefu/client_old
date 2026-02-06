@@ -1,6 +1,6 @@
 ﻿using LaciSynchroni.Common.Dto.Group;
 using LaciSynchroni.PlayerData.Pairs;
-using LaciSynchroni.Services;
+using LaciSynchroni.Services.CharaData;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.Services.ServerConfiguration;
 using LaciSynchroni.SyncConfiguration;

@@ -6,21 +6,13 @@ using Microsoft.Extensions.Logging;
 
 namespace LaciSynchroni.PlayerData.Factories;
 
-public class GameObjectHandlerFactory
+public class GameObjectHandlerFactory(ILoggerFactory loggerFactory, PerformanceCollectorService performanceCollectorService, SyncMediator syncMediator,
+    DalamudUtilService dalamudUtilService)
 {
-    private readonly DalamudUtilService _dalamudUtilService;
-    private readonly ILoggerFactory _loggerFactory;
-    private readonly SyncMediator _syncMediator;
-    private readonly PerformanceCollectorService _performanceCollectorService;
-
-    public GameObjectHandlerFactory(ILoggerFactory loggerFactory, PerformanceCollectorService performanceCollectorService, SyncMediator syncMediator,
-        DalamudUtilService dalamudUtilService)
-    {
-        _loggerFactory = loggerFactory;
-        _performanceCollectorService = performanceCollectorService;
-        _syncMediator = syncMediator;
-        _dalamudUtilService = dalamudUtilService;
-    }
+    private readonly DalamudUtilService _dalamudUtilService = dalamudUtilService;
+    private readonly ILoggerFactory _loggerFactory = loggerFactory;
+    private readonly SyncMediator _syncMediator = syncMediator;
+    private readonly PerformanceCollectorService _performanceCollectorService = performanceCollectorService;
 
     public async Task<GameObjectHandler> Create(ObjectKind objectKind, Func<nint> getAddressFunc, bool isWatched = false)
     {

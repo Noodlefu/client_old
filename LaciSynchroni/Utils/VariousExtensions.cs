@@ -3,7 +3,6 @@ using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using LaciSynchroni.Common.Data;
 using LaciSynchroni.PlayerData.Data;
 using LaciSynchroni.PlayerData.Handlers;
-using LaciSynchroni.PlayerData.Pairs;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using CharacterData = LaciSynchroni.Common.Data.CharacterData;
@@ -104,11 +103,8 @@ public static class VariousExtensions
                     {
                         logger.LogDebug("[BASE-{appBase}] Updating {object}/{kind} (FileReplacements not equal) => {change}", applicationBase, cachedPlayer, objectKind, PlayerChanges.ModFiles);
                         charaDataToUpdate[objectKind].Add(PlayerChanges.ModFiles);
-                        if (forceApplyMods || objectKind != ObjectKind.Player)
-                        {
-                            charaDataToUpdate[objectKind].Add(PlayerChanges.ForcedRedraw);
-                        }
-                        else if (RequiresRedraw(existingFileReplacements!, newFileReplacements!, logger, applicationBase))
+                        if (forceApplyMods || objectKind != ObjectKind.Player
+                            || RequiresRedraw(existingFileReplacements!, newFileReplacements!, logger, applicationBase))
                         {
                             charaDataToUpdate[objectKind].Add(PlayerChanges.ForcedRedraw);
                         }
@@ -180,7 +176,7 @@ public static class VariousExtensions
 
         foreach (KeyValuePair<ObjectKind, HashSet<PlayerChanges>> data in charaDataToUpdate.ToList())
         {
-            if (!data.Value.Any()) charaDataToUpdate.Remove(data.Key);
+            if (data.Value.Count == 0) charaDataToUpdate.Remove(data.Key);
             else charaDataToUpdate[data.Key] = [.. data.Value.OrderByDescending(p => (int)p)];
         }
 
@@ -250,10 +246,9 @@ public static class VariousExtensions
     /// </summary>
     private static List<FileReplacementData> GetReplacementsForPath(List<FileReplacementData> replacements, string pathSegment)
     {
-        return replacements
+        return [.. replacements
             .Where(g => g.GamePaths.Any(p => p.Contains(pathSegment, StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase),];
     }
 
     /// <summary>
@@ -261,9 +256,8 @@ public static class VariousExtensions
     /// </summary>
     private static List<FileReplacementData> GetTransientReplacements(List<FileReplacementData> replacements)
     {
-        return replacements
+        return [.. replacements
             .Where(g => g.GamePaths.Any(p => !p.EndsWith("mdl") && !p.EndsWith("tex") && !p.EndsWith("mtrl")))
-            .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .OrderBy(g => string.IsNullOrEmpty(g.Hash) ? g.FileSwapPath : g.Hash, StringComparer.OrdinalIgnoreCase),];
     }
 }

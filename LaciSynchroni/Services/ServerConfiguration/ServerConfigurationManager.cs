@@ -14,30 +14,18 @@ using System.Text.Json;
 
 namespace LaciSynchroni.Services.ServerConfiguration;
 
-public class ServerConfigurationManager
+public class ServerConfigurationManager(ILogger<ServerConfigurationManager> logger, ServerConfigService serverConfigService,
+    ServerTagConfigService serverTagConfig, NotesConfigService notesConfig, DalamudUtilService dalamudUtil,
+    SyncConfigService syncConfigService, HttpClient httpClient, SyncMediator syncMediator)
 {
-    private readonly ServerConfigService _serverConfigService;
-    private readonly DalamudUtilService _dalamudUtil;
-    private readonly SyncConfigService _syncConfigService;
-    private readonly HttpClient _httpClient;
-    private readonly ILogger<ServerConfigurationManager> _logger;
-    private readonly SyncMediator _syncMediator;
-    private readonly NotesConfigService _notesConfig;
-    private readonly ServerTagConfigService _serverTagConfig;
-
-    public ServerConfigurationManager(ILogger<ServerConfigurationManager> logger, ServerConfigService serverConfigService,
-        ServerTagConfigService serverTagConfig, NotesConfigService notesConfig, DalamudUtilService dalamudUtil,
-        SyncConfigService syncConfigService, HttpClient httpClient, SyncMediator syncMediator)
-    {
-        _logger = logger;
-        _serverConfigService = serverConfigService;
-        _serverTagConfig = serverTagConfig;
-        _notesConfig = notesConfig;
-        _dalamudUtil = dalamudUtil;
-        _syncConfigService = syncConfigService;
-        _httpClient = httpClient;
-        _syncMediator = syncMediator;
-    }
+    private readonly ServerConfigService _serverConfigService = serverConfigService;
+    private readonly DalamudUtilService _dalamudUtil = dalamudUtil;
+    private readonly SyncConfigService _syncConfigService = syncConfigService;
+    private readonly HttpClient _httpClient = httpClient;
+    private readonly ILogger<ServerConfigurationManager> _logger = logger;
+    private readonly SyncMediator _syncMediator = syncMediator;
+    private readonly NotesConfigService _notesConfig = notesConfig;
+    private readonly ServerTagConfigService _serverTagConfig = serverTagConfig;
 
     public IEnumerable<ServerInfoDto> ServerInfo => _serverConfigService.Current.ServerStorage
         .Select((v, index) =>
@@ -129,7 +117,7 @@ public class ServerConfigurationManager
         var charaName = _dalamudUtil.GetPlayerNameAsync().GetAwaiter().GetResult();
         var worldId = _dalamudUtil.GetHomeWorldIdAsync().GetAwaiter().GetResult();
         var cid = _dalamudUtil.GetCIDAsync().GetAwaiter().GetResult();
-        if (!currentServer.Authentications.Any() && currentServer.SecretKeys.Any())
+        if (currentServer.Authentications.Count == 0 && currentServer.SecretKeys.Count != 0)
         {
             currentServer.Authentications.Add(new Authentication()
             {
@@ -209,7 +197,7 @@ public class ServerConfigurationManager
 
     public List<ServerInfoDto> GetServerInfo()
     {
-        return ServerInfo.ToList();
+        return [.. ServerInfo];
     }
 
     public string[] GetServerNames()
@@ -232,7 +220,7 @@ public class ServerConfigurationManager
     internal void AddCurrentCharacterToServer(int serverSelectionIndex)
     {
         var server = GetServerByIndex(serverSelectionIndex);
-        if (server.Authentications.Any(c => string.Equals(c.CharacterName, _dalamudUtil.GetPlayerNameAsync().GetAwaiter().GetResult(), StringComparison.Ordinal)
+        if (server.Authentications.Exists(c => string.Equals(c.CharacterName, _dalamudUtil.GetPlayerNameAsync().GetAwaiter().GetResult(), StringComparison.Ordinal)
                 && c.WorldId == _dalamudUtil.GetHomeWorldIdAsync().GetAwaiter().GetResult()))
             return;
 
@@ -251,7 +239,7 @@ public class ServerConfigurationManager
         var server = GetServerByIndex(serverSelectionIndex);
         server.Authentications.Add(new Authentication()
         {
-            SecretKeyIdx = server.SecretKeys.Any() ? server.SecretKeys.First().Key : -1,
+            SecretKeyIdx = server.SecretKeys.Count != 0 ? server.SecretKeys.First().Key : -1,
         });
         Save();
     }
@@ -372,7 +360,7 @@ public class ServerConfigurationManager
     {
         if (GetTagStorageForIndex(serverIndex).UidServerPairedUserTags.TryGetValue(uid, out var tags))
         {
-            return tags.Any();
+            return tags.Count != 0;
         }
 
         return false;
@@ -527,7 +515,7 @@ public class ServerConfigurationManager
             var baseUri = serverUri.Replace("wss://", "https://").Replace("ws://", "http://");
             var oauthCheckUri = AuthRoutes.GetDiscordOAuthTokenFullPath(new Uri(baseUri), sessionId);
             var response = await _httpClient.GetAsync(oauthCheckUri, linkedCts.Token).ConfigureAwait(false);
-            discordToken = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            discordToken = await response.Content.ReadAsStringAsync(linkedCts.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

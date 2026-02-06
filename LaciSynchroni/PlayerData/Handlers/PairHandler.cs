@@ -2,6 +2,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using LaciSynchroni.Common.Data;
 using LaciSynchroni.FileCache;
 using LaciSynchroni.Interop.Ipc;
+using LaciSynchroni.PlayerData.Data;
 using LaciSynchroni.PlayerData.Factories;
 using LaciSynchroni.PlayerData.Pairs;
 using LaciSynchroni.Services;
@@ -15,6 +16,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using CharacterData = LaciSynchroni.Common.Data.CharacterData;
 using ObjectKind = LaciSynchroni.Common.Data.Enum.ObjectKind;
 
 namespace LaciSynchroni.PlayerData.Handlers;
@@ -302,7 +304,8 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                     using var cts = new CancellationTokenSource();
                     cts.CancelAfter(TimeSpan.FromSeconds(60));
 
-                    Logger.LogInformation("[{applicationId}] CachedData is null {isNull}, contains things: {contains}", applicationId, _cachedData == null, _cachedData?.FileReplacements.Any() ?? false);
+                    Logger.LogInformation("[{applicationId}] CachedData is null {isNull}, contains things: {contains}", applicationId, _cachedData == null, _cachedData?.FileReplacements.Count is not 0 and not null
+);
 
                     foreach (KeyValuePair<ObjectKind, List<FileReplacementData>> item in _cachedData?.FileReplacements ?? [])
                     {
@@ -342,7 +345,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             ObjectKind.Companion => await _gameObjectHandlerFactory.Create(changes.Key, () => _dalamudUtil.GetCompanionPtr(ptr), isWatched: false).ConfigureAwait(false),
             ObjectKind.MinionOrMount => await _gameObjectHandlerFactory.Create(changes.Key, () => _dalamudUtil.GetMinionOrMountPtr(ptr), isWatched: false).ConfigureAwait(false),
             ObjectKind.Pet => await _gameObjectHandlerFactory.Create(changes.Key, () => _dalamudUtil.GetPetPtr(ptr), isWatched: false).ConfigureAwait(false),
-            _ => throw new NotSupportedException("ObjectKind not supported: " + changes.Key)
+            _ => throw new NotSupportedException("ObjectKind not supported: " + changes.Key),
         };
 
         try
@@ -413,7 +416,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
     private void DownloadAndApplyCharacter(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData)
     {
-        if (!updatedData.Any())
+        if (updatedData.Count == 0)
         {
             Logger.LogDebug("[BASE-{appBase}] Nothing to update for {obj}", applicationBase, this);
             return;
@@ -460,7 +463,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                     return;
                 }
 
-                _pairDownloadTask = Task.Run(async () => await _downloadManager.DownloadFiles(Pair.ServerIndex, _charaHandler!, toDownloadReplacements, downloadToken).ConfigureAwait(false));
+                _pairDownloadTask = Task.Run(async () => await _downloadManager.DownloadFiles(Pair.ServerIndex, _charaHandler!, toDownloadReplacements, downloadToken).ConfigureAwait(false), downloadToken);
 
                 await _pairDownloadTask.ConfigureAwait(false);
 
@@ -755,15 +758,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             .Select(v => v.Hash)
             .Distinct(StringComparer.Ordinal);
 
-        foreach (var hash in fileHashes)
-        {
-            if (_fileDbManager.GetFileCacheByHash(hash) == null)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return fileHashes.Any(hash => _fileDbManager.GetFileCacheByHash(hash) == null);
     }
 
     private List<FileReplacementData> TryCalculateModdedDictionary(Guid applicationBase, CharacterData charaData, out Dictionary<(string GamePath, string? Hash), string> moddedDictionary, CancellationToken token)
@@ -780,7 +775,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             Parallel.ForEach(replacementList, new ParallelOptions()
             {
                 CancellationToken = token,
-                MaxDegreeOfParallelism = 4
+                MaxDegreeOfParallelism = 4,
             },
             (item) =>
             {

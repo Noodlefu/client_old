@@ -6,21 +6,13 @@ using Microsoft.Extensions.Logging;
 
 namespace LaciSynchroni.PlayerData.Factories;
 
-public class PairFactory
+public class PairFactory(ILoggerFactory loggerFactory, PairHandlerFactory cachedPlayerFactory,
+    SyncMediator syncMediator, ServerConfigurationManager serverConfigurationManager)
 {
-    private readonly PairHandlerFactory _cachedPlayerFactory;
-    private readonly ILoggerFactory _loggerFactory;
-    private readonly SyncMediator _syncMediator;
-    private readonly ServerConfigurationManager _serverConfigurationManager;
-
-    public PairFactory(ILoggerFactory loggerFactory, PairHandlerFactory cachedPlayerFactory,
-        SyncMediator syncMediator, ServerConfigurationManager serverConfigurationManager)
-    {
-        _loggerFactory = loggerFactory;
-        _cachedPlayerFactory = cachedPlayerFactory;
-        _syncMediator = syncMediator;
-        _serverConfigurationManager = serverConfigurationManager;
-    }
+    private readonly PairHandlerFactory _cachedPlayerFactory = cachedPlayerFactory;
+    private readonly ILoggerFactory _loggerFactory = loggerFactory;
+    private readonly SyncMediator _syncMediator = syncMediator;
+    private readonly ServerConfigurationManager _serverConfigurationManager = serverConfigurationManager;
 
     public Pair Create(UserFullPairDto userPairDto, int serverIndex)
     {

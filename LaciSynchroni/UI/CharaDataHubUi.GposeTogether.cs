@@ -5,6 +5,7 @@ using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
+using LaciSynchroni.Services;
 using LaciSynchroni.Services.CharaData.Models;
 
 namespace LaciSynchroni.UI;
@@ -44,7 +45,7 @@ internal sealed partial class CharaDataHubUi
                 {
                     unsafe
                     {
-                        _dalamudUtilService.GposeTarget = (GameObject*)actor.Address;
+                        DalamudUtilService.GposeTarget = (GameObject*)actor.Address;
                     }
                 }
                 ImGui.SameLine();
@@ -153,7 +154,7 @@ internal sealed partial class CharaDataHubUi
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted("GPose Lobby");
             ImGui.SameLine();
-            UiSharedService.ColorTextWrapped(_charaDataGposeTogetherManager.CurrentGPoseLobbyId, ImGuiColors.ParsedGreen);            
+            UiSharedService.ColorTextWrapped(_charaDataGposeTogetherManager.CurrentGPoseLobbyId, ImGuiColors.ParsedGreen);
             ImGui.SameLine();
             if (_uiSharedService.IconButton(FontAwesomeIcon.Clipboard))
             {
@@ -184,7 +185,7 @@ internal sealed partial class CharaDataHubUi
             UiSharedService.DrawGroupedCenteredColorText("Assigning users to characters is only available in GPose.", ImGuiColors.DalamudYellow);
             ImGuiHelpers.ScaledDummy(5);
         }
-        else if(string.IsNullOrEmpty(_charaDataGposeTogetherManager.CurrentGPoseLobbyId))
+        else if (string.IsNullOrEmpty(_charaDataGposeTogetherManager.CurrentGPoseLobbyId))
         {
             ImGuiHelpers.ScaledDummy(5);
             UiSharedService.DrawGroupedCenteredColorText("Create or Join a Gpose Together lobby to assign characters.", ImGuiColors.DalamudYellow);

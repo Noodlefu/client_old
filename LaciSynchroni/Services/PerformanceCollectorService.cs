@@ -8,19 +8,13 @@ using System.Text;
 
 namespace LaciSynchroni.Services;
 
-public sealed class PerformanceCollectorService : IHostedService
+public sealed class PerformanceCollectorService(ILogger<PerformanceCollectorService> logger, SyncConfigService syncConfigService) : IHostedService
 {
     private const string _counterSplit = "=>";
-    private readonly ILogger<PerformanceCollectorService> _logger;
-    private readonly SyncConfigService _syncConfigService;
+    private readonly ILogger<PerformanceCollectorService> _logger = logger;
+    private readonly SyncConfigService _syncConfigService = syncConfigService;
     public ConcurrentDictionary<string, RollingList<(TimeOnly, long)>> PerformanceCounters { get; } = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _periodicLogPruneTaskCts = new();
-
-    public PerformanceCollectorService(ILogger<PerformanceCollectorService> logger, SyncConfigService syncConfigService)
-    {
-        _logger = logger;
-        _syncConfigService = syncConfigService;
-    }
 
     public T LogPerformance<T>(object sender, CustomInterpolatedStringHandler counterName, Func<T> func, int maxEntries = 10000)
     {
@@ -133,15 +127,15 @@ public sealed class PerformanceCollectorService : IHostedService
 
             var pastEntries = limitBySeconds > 0 ? entry.Value.Where(e => e.Item1.AddMinutes(limitBySeconds / 60.0d) >= TimeOnly.FromDateTime(DateTime.Now)).ToList() : [.. entry.Value];
 
-            if (pastEntries.Any())
+            if (pastEntries.Count != 0)
             {
-                sb.Append((" " + TimeSpan.FromTicks(pastEntries.LastOrDefault() == default ? 0 : pastEntries.Last().Item2).TotalMilliseconds.ToString("0.00000", CultureInfo.InvariantCulture)).PadRight(15));
+                sb.Append((" " + TimeSpan.FromTicks(pastEntries[^1].Item2).TotalMilliseconds.ToString("0.00000", CultureInfo.InvariantCulture)).PadRight(15));
                 sb.Append('|');
                 sb.Append((" " + TimeSpan.FromTicks(pastEntries.Max(m => m.Item2)).TotalMilliseconds.ToString("0.00000", CultureInfo.InvariantCulture)).PadRight(15));
                 sb.Append('|');
                 sb.Append((" " + TimeSpan.FromTicks((long)pastEntries.Average(m => m.Item2)).TotalMilliseconds.ToString("0.00000", CultureInfo.InvariantCulture)).PadRight(15));
                 sb.Append('|');
-                sb.Append((" " + (pastEntries.LastOrDefault() == default ? "-" : pastEntries.Last().Item1.ToString("HH:mm:ss.ffff", CultureInfo.InvariantCulture))).PadRight(15, ' '));
+                sb.Append((" " + pastEntries[^1].Item1.ToString("HH:mm:ss.ffff", CultureInfo.InvariantCulture)).PadRight(15, ' '));
                 sb.Append('|');
                 sb.Append((" " + pastEntries.Count).PadRight(10));
                 sb.Append('|');

@@ -12,25 +12,16 @@ using Microsoft.Extensions.Logging;
 
 namespace LaciSynchroni.Services;
 
-public class PlayerPerformanceService
+public class PlayerPerformanceService(ILogger<PlayerPerformanceService> logger, SyncMediator mediator,
+    PlayerPerformanceConfigService playerPerformanceConfigService, FileCacheManager fileCacheManager,
+    XivDataAnalyzer xivDataAnalyzer)
 {
-    private readonly FileCacheManager _fileCacheManager;
-    private readonly XivDataAnalyzer _xivDataAnalyzer;
-    private readonly ILogger<PlayerPerformanceService> _logger;
-    private readonly SyncMediator _mediator;
-    private readonly PlayerPerformanceConfigService _playerPerformanceConfigService;
+    private readonly FileCacheManager _fileCacheManager = fileCacheManager;
+    private readonly XivDataAnalyzer _xivDataAnalyzer = xivDataAnalyzer;
+    private readonly ILogger<PlayerPerformanceService> _logger = logger;
+    private readonly SyncMediator _mediator = mediator;
+    private readonly PlayerPerformanceConfigService _playerPerformanceConfigService = playerPerformanceConfigService;
     private readonly Dictionary<string, bool> _warnedForPlayers = new(StringComparer.Ordinal);
-
-    public PlayerPerformanceService(ILogger<PlayerPerformanceService> logger, SyncMediator mediator,
-        PlayerPerformanceConfigService playerPerformanceConfigService, FileCacheManager fileCacheManager,
-        XivDataAnalyzer xivDataAnalyzer)
-    {
-        _logger = logger;
-        _mediator = mediator;
-        _playerPerformanceConfigService = playerPerformanceConfigService;
-        _fileCacheManager = fileCacheManager;
-        _xivDataAnalyzer = xivDataAnalyzer;
-    }
 
     public async Task<bool> CheckBothThresholds(PairHandler pairHandler, CharacterData charaData)
     {

@@ -6,18 +6,14 @@ namespace LaciSynchroni.Services.Infrastructure;
 /// Base class for services that manage CancellationTokenSources.
 /// Provides automatic tracking and disposal of managed CTS instances.
 /// </summary>
-public abstract class CancellableServiceBase : IDisposable
+public abstract class CancellableServiceBase(ILogger logger) : IDisposable
 {
     private readonly List<CancellationTokenSource> _managedTokenSources = [];
     private readonly Lock _ctsLock = new();
     private bool _disposed;
 
-    protected ILogger Logger { get; }
+    protected ILogger Logger { get; } = logger;
 
-    protected CancellableServiceBase(ILogger logger)
-    {
-        Logger = logger;
-    }
 
     /// <summary>
     /// Creates a new CancellationTokenSource that will be automatically disposed.
@@ -97,7 +93,7 @@ public abstract class CancellableServiceBase : IDisposable
     /// Cancels a specific managed CTS without recreating it.
     /// </summary>
     /// <param name="cts">The CTS to cancel.</param>
-    protected void CancelCts(CancellationTokenSource? cts)
+    protected static void CancelCts(CancellationTokenSource? cts)
     {
         if (cts == null)
             return;

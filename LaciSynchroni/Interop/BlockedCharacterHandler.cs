@@ -8,7 +8,7 @@ namespace LaciSynchroni.Interop;
 public unsafe class BlockedCharacterHandler
 {
     private sealed record CharaData(ulong AccId, ulong ContentId);
-    private readonly Dictionary<CharaData, bool> _blockedCharacterCache = new();
+    private readonly Dictionary<CharaData, bool> _blockedCharacterCache = [];
 
     private readonly ILogger<BlockedCharacterHandler> _logger;
 

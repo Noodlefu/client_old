@@ -1,26 +1,21 @@
 ﻿using LaciSynchroni.Common.Data;
 using LaciSynchroni.Common.Data.Comparer;
 using LaciSynchroni.Interop.Ipc;
+using LaciSynchroni.PlayerData.Data;
+using LaciSynchroni.PlayerData.Pairs;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.SyncConfiguration.Models;
 using System.Collections.Concurrent;
 
-namespace LaciSynchroni.PlayerData.Pairs;
+namespace LaciSynchroni.Services;
 
-public class PluginWarningNotificationService
+public class PluginWarningNotificationService(SyncConfigService syncConfigService, IpcManager ipcManager, SyncMediator mediator)
 {
     private readonly ConcurrentDictionary<UserData, OptionalPluginWarning> _cachedOptionalPluginWarnings = new(UserDataComparer.Instance);
-    private readonly IpcManager _ipcManager;
-    private readonly SyncConfigService _syncConfigService;
-    private readonly SyncMediator _mediator;
-
-    public PluginWarningNotificationService(SyncConfigService syncConfigService, IpcManager ipcManager, SyncMediator mediator)
-    {
-        _syncConfigService = syncConfigService;
-        _ipcManager = ipcManager;
-        _mediator = mediator;
-    }
+    private readonly IpcManager _ipcManager = ipcManager;
+    private readonly SyncConfigService _syncConfigService = syncConfigService;
+    private readonly SyncMediator _mediator = mediator;
 
     public void NotifyForMissingPlugins(UserData user, string playerName, HashSet<PlayerChanges> changes)
     {
@@ -32,7 +27,7 @@ public class PluginWarningNotificationService
                 ShownHeelsWarning = _syncConfigService.Current.DisableOptionalPluginWarnings,
                 ShownHonorificWarning = _syncConfigService.Current.DisableOptionalPluginWarnings,
                 ShownMoodlesWarning = _syncConfigService.Current.DisableOptionalPluginWarnings,
-                ShowPetNicknamesWarning = _syncConfigService.Current.DisableOptionalPluginWarnings
+                ShowPetNicknamesWarning = _syncConfigService.Current.DisableOptionalPluginWarnings,
             };
         }
 
@@ -66,7 +61,7 @@ public class PluginWarningNotificationService
             warning.ShowPetNicknamesWarning = true;
         }
 
-        if (missingPluginsForData.Any())
+        if (missingPluginsForData.Count != 0)
         {
             _mediator.Publish(new NotificationMessage("Missing plugins for " + playerName,
                 $"Received data for {playerName} that contained information for plugins you have not installed. Install {string.Join(", ", missingPluginsForData)} to experience their character fully.",

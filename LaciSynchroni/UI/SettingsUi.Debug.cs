@@ -271,7 +271,7 @@ public partial class SettingsUi
                 _validationCts?.Dispose();
                 _validationCts = new CancellationTokenSource();
                 var token = _validationCts.Token;
-                _validationTask = Task.Run(() => _fileCacheManager.ValidateLocalIntegrity(_validationProgress, token));
+                _validationTask = Task.Run(() => _fileCacheManager.ValidateLocalIntegrity(_validationProgress, token), token);
             }
         }
         if (_validationTask != null && !_validationTask.IsCompleted)

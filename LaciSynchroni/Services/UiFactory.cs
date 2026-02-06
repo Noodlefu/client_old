@@ -9,30 +9,18 @@ using Microsoft.Extensions.Logging;
 
 namespace LaciSynchroni.Services;
 
-public class UiFactory
+public class UiFactory(ILoggerFactory loggerFactory, SyncMediator syncMediator, ApiController apiController,
+    UiSharedService uiSharedService, PairManager pairManager, ServerConfigurationManager serverConfigManager,
+    ProfileManager profileManager, PerformanceCollectorService performanceCollectorService)
 {
-    private readonly ILoggerFactory _loggerFactory;
-    private readonly SyncMediator _syncMediator;
-    private readonly ApiController _apiController;
-    private readonly UiSharedService _uiSharedService;
-    private readonly PairManager _pairManager;
-    private readonly ServerConfigurationManager _serverConfigManager;
-    private readonly ProfileManager _profileManager;
-    private readonly PerformanceCollectorService _performanceCollectorService;
-
-    public UiFactory(ILoggerFactory loggerFactory, SyncMediator syncMediator, ApiController apiController,
-        UiSharedService uiSharedService, PairManager pairManager, ServerConfigurationManager serverConfigManager,
-        ProfileManager profileManager, PerformanceCollectorService performanceCollectorService)
-    {
-        _loggerFactory = loggerFactory;
-        _syncMediator = syncMediator;
-        _apiController = apiController;
-        _uiSharedService = uiSharedService;
-        _pairManager = pairManager;
-        _serverConfigManager = serverConfigManager;
-        _profileManager = profileManager;
-        _performanceCollectorService = performanceCollectorService;
-    }
+    private readonly ILoggerFactory _loggerFactory = loggerFactory;
+    private readonly SyncMediator _syncMediator = syncMediator;
+    private readonly ApiController _apiController = apiController;
+    private readonly UiSharedService _uiSharedService = uiSharedService;
+    private readonly PairManager _pairManager = pairManager;
+    private readonly ServerConfigurationManager _serverConfigManager = serverConfigManager;
+    private readonly ProfileManager _profileManager = profileManager;
+    private readonly PerformanceCollectorService _performanceCollectorService = performanceCollectorService;
 
     public SyncshellAdminUI CreateSyncshellAdminUi(GroupFullInfoDto dto, int serverIndex)
     {

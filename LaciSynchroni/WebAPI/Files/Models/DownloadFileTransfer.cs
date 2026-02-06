@@ -2,12 +2,8 @@
 
 namespace LaciSynchroni.WebAPI.Files.Models;
 
-public class DownloadFileTransfer : FileTransfer
+public class DownloadFileTransfer(DownloadFileDto dto, int serverIndex) : FileTransfer(dto, serverIndex)
 {
-    public DownloadFileTransfer(DownloadFileDto dto, int serverIndex) : base(dto, serverIndex)
-    {
-    }
-
     public override bool CanBeTransferred => Dto.FileExists && !Dto.IsForbidden && Dto.Size > 0;
     public Uri DownloadUri => new(string.IsNullOrEmpty(Dto.DirectDownloadUrl) ? (string.IsNullOrEmpty(Dto.CDNDownloadUrl) ? Dto.Url : Dto.CDNDownloadUrl) : Dto.DirectDownloadUrl);
     public bool IsDirectDownload => !string.IsNullOrEmpty(Dto.DirectDownloadUrl) || !string.IsNullOrEmpty(Dto.CDNDownloadUrl);

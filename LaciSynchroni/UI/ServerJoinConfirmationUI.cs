@@ -96,7 +96,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
 
         var uri = new Uri(_pendingServer.ServerUri);
 
-        _serverInfoTask = Task.Run(async () => await _httpClient.GetAsync(new UriBuilder(uri.Scheme.Equals("wss") ? Uri.UriSchemeHttps : Uri.UriSchemeHttp, uri!.Host, uri.Port == -1 ? 443 : uri.Port, "/clientconfiguration/get").Uri).ConfigureAwait(false));
+        _serverInfoTask = Task.Run(async () => await _httpClient.GetAsync(new UriBuilder(uri.Scheme.Equals("wss") ? Uri.UriSchemeHttps : Uri.UriSchemeHttp, uri!.Host, uri.Port == -1 ? 443 : uri.Port, "/clientconfiguration/get").Uri).ConfigureAwait(false), _authCts.Token);
     }
 
     public override void OnOpen()
@@ -497,7 +497,7 @@ internal class ServerJoinConfirmationUI : WindowMediatorSubscriberBase
             if (_uiSharedService.IconTextButton(FontAwesomeIcon.Check, "Finish & Connect"))
             {
                 // Initiate connection to the newly added server
-                _ = Task.Run(async () => await _uiSharedService.ApiController.CreateConnectionsAsync(_addedServerIndex));
+                _ = Task.Run(async () => await _uiSharedService.ApiController.CreateConnectionsAsync(_addedServerIndex), _authCts.Token);
 
                 Mediator.Publish(new NotificationMessage(
                     "Connecting",

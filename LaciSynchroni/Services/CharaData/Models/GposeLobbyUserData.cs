@@ -158,7 +158,7 @@ public sealed record GposeLobbyUserData(UserData UserData)
             {
                 1 => "No",
                 2 => "Yes",
-                _ => "-"
+                _ => "-",
             });
         }
         if (worldData.LocationInfo.HouseId != 0)

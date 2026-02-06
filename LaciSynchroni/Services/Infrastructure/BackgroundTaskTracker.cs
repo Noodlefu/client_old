@@ -7,18 +7,14 @@ namespace LaciSynchroni.Services.Infrastructure;
 /// Tracks background tasks to ensure they complete successfully and logs any failures.
 /// Prevents fire-and-forget tasks from silently failing.
 /// </summary>
-public sealed class BackgroundTaskTracker : IDisposable
+public sealed class BackgroundTaskTracker(ILogger<BackgroundTaskTracker> logger) : IDisposable
 {
-    private readonly ILogger<BackgroundTaskTracker> _logger;
+    private readonly ILogger<BackgroundTaskTracker> _logger = logger;
     private readonly ConcurrentDictionary<int, TrackedTask> _activeTasks = new();
     private readonly CancellationTokenSource _disposalCts = new();
     private int _taskIdCounter;
     private bool _disposed;
 
-    public BackgroundTaskTracker(ILogger<BackgroundTaskTracker> logger)
-    {
-        _logger = logger;
-    }
 
     /// <summary>
     /// Gets the number of currently active (incomplete) tasks.

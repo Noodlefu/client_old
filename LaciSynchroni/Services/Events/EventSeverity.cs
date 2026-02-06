@@ -4,5 +4,5 @@ public enum EventSeverity
 {
     Informational = 0,
     Warning = 1,
-    Error = 2
+    Error = 2,
 }

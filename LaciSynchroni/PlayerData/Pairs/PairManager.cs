@@ -78,17 +78,17 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     public void AddGroupPair(GroupPairFullInfoDto dto, int serverIndex)
     {
         var key = BuildKey(dto.User, serverIndex);
-        if (!_allClientPairs.ContainsKey(key))
+        if (_allClientPairs.TryGetValue(key, out var existingPair))
+        {
+            existingPair.UserPair.Groups.Add(dto.GID);
+        }
+        else
         {
             var newPair = _pairFactory.Create(new UserFullPairDto(dto.User,
                 IndividualPairStatus.None,
                 [dto.Group.GID], dto.SelfToOtherPermissions, dto.OtherToSelfPermissions), serverIndex);
             _allClientPairs[key] = newPair;
             AddToUidIndex(key, newPair);
-        }
-        else
-        {
-            _allClientPairs[key].UserPair.Groups.Add(dto.GID);
         }
         InvalidateGroupPairs();
         InvalidatePairsWithGroups();
@@ -104,16 +104,16 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     public void AddUserPair(UserFullPairDto dto, int serverIndex)
     {
         var key = BuildKey(dto.User, serverIndex);
-        if (!_allClientPairs.ContainsKey(key))
+        if (_allClientPairs.TryGetValue(key, out var existingPair))
+        {
+            existingPair.UserPair.IndividualPairStatus = dto.IndividualPairStatus;
+            existingPair.ApplyLastReceivedData();
+        }
+        else
         {
             var newPair = _pairFactory.Create(dto, serverIndex);
             _allClientPairs[key] = newPair;
             AddToUidIndex(key, newPair);
-        }
-        else
-        {
-            _allClientPairs[key].UserPair.IndividualPairStatus = dto.IndividualPairStatus;
-            _allClientPairs[key].ApplyLastReceivedData();
         }
 
         InvalidateDirectPairs();
@@ -163,30 +163,30 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         RefreshUi();
     }
 
-    public List<Pair> GetOnlineUserPairs(int serverIndex) => _allClientPairs
-        .Where(p => p.Key.ServerIndex == serverIndex)
-        .Where(p => !string.IsNullOrEmpty(p.Value.GetPlayerNameHash())).Select(p => p.Value).ToList();
+    public List<Pair> GetOnlineUserPairs(int serverIndex) => [.. _allClientPairs
+        .Where(p => p.Key.ServerIndex == serverIndex && !string.IsNullOrEmpty(p.Value.GetPlayerNameHash()))
+        .Select(p => p.Value),];
 
-    public List<Pair> GetOnlineUserPairsAcrossAllServers() => _allClientPairs
-        .Where(p => !string.IsNullOrEmpty(p.Value.GetPlayerNameHash())).Select(p => p.Value).ToList();
+    public List<Pair> GetOnlineUserPairsAcrossAllServers() => [.. _allClientPairs
+        .Where(p => !string.IsNullOrEmpty(p.Value.GetPlayerNameHash())).Select(p => p.Value),];
 
     public int GetVisibleUserCountAcrossAllServers() => _allClientPairs
         .Count(p => p.Value.IsVisible);
 
-    public int GetVisibleUserCount(int serverIndex) => _allClientPairs.Where(p => p.Key.ServerIndex == serverIndex).Count(p => p.Value.IsVisible);
+    public int GetVisibleUserCount(int serverIndex) => _allClientPairs.Count(p => p.Key.ServerIndex == serverIndex && p.Value.IsVisible);
 
     public List<ServerBasedUserKey> GetVisibleUsers(int serverIndex) =>
     [
         .. _allClientPairs
             .Where(p => p.Key.ServerIndex == serverIndex && p.Value.IsVisible)
-            .Select(p => p.Key)
+            .Select(p => p.Key),
     ];
 
     public List<ServerBasedUserKey> GetVisibleUsersAcrossAllServers() =>
     [
         .. _allClientPairs
             .Where(p => p.Value.IsVisible)
-            .Select(p => p.Key)
+            .Select(p => p.Key),
     ];
 
     public void MarkPairOffline(UserData user, int serverIndex)
@@ -209,14 +209,12 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     public void MarkPairOnline(OnlineUserIdentDto dto, int serverIndex, bool sendNotif = true)
     {
         var key = BuildKey(dto.User, serverIndex);
-        if (!_allClientPairs.ContainsKey(key)) throw new InvalidOperationException("No user found for " + dto);
+        if (!_allClientPairs.TryGetValue(key, out var pair)) throw new InvalidOperationException("No user found for " + dto);
 
         var message = new ServerBasedUserKey(dto.User, serverIndex);
         Mediator.Publish(new ClearProfileDataMessage(message));
         // Notify that this pair came online so VisibleUserDataDistributor can clear them from cache
         Mediator.Publish(new PairWentOnlineMessage(message));
-
-        var pair = _allClientPairs[key];
         if (pair.HasCachedPlayer)
         {
             // Only UI refresh needed - pair data structure unchanged
@@ -481,7 +479,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                 OnClicked = (a) => Mediator.Publish(new ProfileOpenStandaloneMessage(pair)),
                 UseDefaultPrefix = false,
                 PrefixChar = 'L',
-                PrefixColor = 526
+                PrefixColor = 526,
             });
 
             args.AddMenuItem(new MenuItem()
@@ -490,7 +488,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                 OnClicked = (a) => pair.ApplyLastReceivedData(forced: true),
                 UseDefaultPrefix = false,
                 PrefixChar = 'L',
-                PrefixColor = 526
+                PrefixColor = 526,
             });
 
             args.AddMenuItem(new MenuItem()
@@ -499,7 +497,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                 OnClicked = (a) => Mediator.Publish(new OpenPermissionWindow(pair)),
                 UseDefaultPrefix = false,
                 PrefixChar = 'L',
-                PrefixColor = 526
+                PrefixColor = 526,
             });
 
             args.AddMenuItem(new MenuItem()
@@ -508,7 +506,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                 OnClicked = (a) => Mediator.Publish(new CyclePauseMessage(pair.ServerIndex, pair.UserData)),
                 UseDefaultPrefix = false,
                 PrefixChar = 'L',
-                PrefixColor = 526
+                PrefixColor = 526,
             });
         }
         else
@@ -525,7 +523,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                     pair => Mediator.Publish(new ProfileOpenStandaloneMessage(pair)))),
                 UseDefaultPrefix = false,
                 PrefixChar = 'L',
-                PrefixColor = 526
+                PrefixColor = 526,
             });
 
             // Reapply Data - only for the server with render lock
@@ -539,7 +537,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                     OnClicked = (a) => renderLockPair.ApplyLastReceivedData(forced: true),
                     UseDefaultPrefix = false,
                     PrefixChar = 'L',
-                    PrefixColor = 526
+                    PrefixColor = 526,
                 });
             }
 
@@ -552,7 +550,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                     pair => Mediator.Publish(new OpenPermissionWindow(pair)))),
                 UseDefaultPrefix = false,
                 PrefixChar = 'L',
-                PrefixColor = 526
+                PrefixColor = 526,
             });
 
             // Cycle Pause State submenu - includes "All Servers" option
@@ -563,7 +561,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                 OnClicked = (a) => a.OpenSubmenu(BuildCyclePauseSubmenuItems(pairsForClosure)),
                 UseDefaultPrefix = false,
                 PrefixChar = 'L',
-                PrefixColor = 526
+                PrefixColor = 526,
             });
         }
     }
@@ -576,20 +574,20 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
             OnClicked = (a) => action(pair),
             UseDefaultPrefix = false,
             PrefixChar = 'L',
-            PrefixColor = 526
+            PrefixColor = 526,
         }).ToList();
 
         items.Add(new MenuItem()
         {
             Name = "Return",
             IsReturn = true,
-            OnClicked = (a) => ReopenContextMenu()
+            OnClicked = (a) => ReopenContextMenu(),
         });
 
         return items;
     }
 
-    private unsafe void ReopenContextMenu()
+    private static unsafe void ReopenContextMenu()
     {
         var agentContext = AgentContext.Instance();
         if (agentContext != null)
@@ -603,7 +601,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         var items = new List<MenuItem>
         {
             // "All Servers" option first
-            new MenuItem()
+            new()
             {
                 Name = "All Servers",
                 OnClicked = (a) =>
@@ -613,8 +611,8 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
                 },
                 UseDefaultPrefix = false,
                 PrefixChar = 'L',
-                PrefixColor = 526
-            }
+                PrefixColor = 526,
+            },
         };
 
         // Per-server options
@@ -624,21 +622,20 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
             OnClicked = (a) => Mediator.Publish(new CyclePauseMessage(pair.ServerIndex, pair.UserData)),
             UseDefaultPrefix = false,
             PrefixChar = 'L',
-            PrefixColor = 526
+            PrefixColor = 526,
         }));
 
         items.Add(new MenuItem()
         {
             Name = "Return",
             IsReturn = true,
-            OnClicked = (a) => ReopenContextMenu()
+            OnClicked = (a) => ReopenContextMenu(),
         });
 
         return items;
     }
 
-    private Lazy<List<Pair>> DirectPairsLazy() => new(() => _allClientPairs.Select(k => k.Value)
-        .Where(k => k.IndividualPairStatus != IndividualPairStatus.None).ToList());
+    private Lazy<List<Pair>> DirectPairsLazy() => new(() => [.. _allClientPairs.Select(k => k.Value).Where(k => k.IndividualPairStatus != IndividualPairStatus.None)]);
 
     private void DisposePairs(int? serverIndex)
     {
@@ -698,8 +695,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
 
             foreach (var pair in _allClientPairs.Select(k => k.Value))
             {
-                outDict[pair] = _allGroups.Where(k => pair.UserPair.Groups.Contains(k.Key.GroupData.GID, StringComparer.Ordinal))
-                    .Select(k => k.Value).ToList();
+                outDict[pair] = [.. _allGroups.Where(k => pair.UserPair.Groups.Contains(k.Key.GroupData.GID, StringComparer.Ordinal)).Select(k => k.Value)];
             }
 
             return outDict;
@@ -730,9 +726,9 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     private void RedrawStillVisiblePairs(Pair removedPair, string? removedPlayerName)
     {
         _allClientPairs
-            .Where(valuePair => string.Equals(valuePair.Value.PlayerName, removedPlayerName, StringComparison.OrdinalIgnoreCase))
-            .Where(valuePair => removedPair != valuePair.Value)
-            .Where(valuePair => valuePair.Value.IsVisible)
+            .Where(valuePair => string.Equals(valuePair.Value.PlayerName, removedPlayerName, StringComparison.OrdinalIgnoreCase)
+                && removedPair != valuePair.Value
+                && valuePair.Value.IsVisible)
             .Select(valuePair => valuePair.Value)
             .ToList()
             .ForEach(p => p.ApplyLastReceivedData(true));
@@ -773,12 +769,12 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         Mediator.Publish(new RefreshUiMessage());
     }
 
-    private ServerBasedUserKey BuildKey(UserData user, int serverIndex)
+    private static ServerBasedUserKey BuildKey(UserData user, int serverIndex)
     {
         return new ServerBasedUserKey(user, serverIndex);
     }
 
-    private ServerBasedGroupKey BuildKey(GroupData group, int serverIndex)
+    private static ServerBasedGroupKey BuildKey(GroupData group, int serverIndex)
     {
         return new ServerBasedGroupKey(group, serverIndex);
     }

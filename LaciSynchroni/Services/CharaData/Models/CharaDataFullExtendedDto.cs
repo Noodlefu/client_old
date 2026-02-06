@@ -8,8 +8,8 @@ public sealed record CharaDataFullExtendedDto : CharaDataFullDto
     public CharaDataFullExtendedDto(CharaDataFullDto baseDto) : base(baseDto)
     {
         FullId = baseDto.Uploader.UID + ":" + baseDto.Id;
-        MissingFiles = new ReadOnlyCollection<GamePathEntry>(baseDto.OriginalFiles.Except(baseDto.FileGamePaths).ToList());
-        HasMissingFiles = MissingFiles.Any();
+        MissingFiles = new ReadOnlyCollection<GamePathEntry>([.. baseDto.OriginalFiles.Except(baseDto.FileGamePaths)]);
+        HasMissingFiles = MissingFiles.Count != 0;
     }
 
     public string FullId { get; set; }

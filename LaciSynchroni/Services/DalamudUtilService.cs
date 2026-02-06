@@ -154,14 +154,14 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
 
     public bool IsWine { get; init; }
 
-    public unsafe GameObject* GposeTarget
+    public static unsafe GameObject* GposeTarget
     {
         get => TargetSystem.Instance()->GPoseTarget;
         set => TargetSystem.Instance()->GPoseTarget = value;
     }
 
-    private unsafe bool HasGposeTarget => GposeTarget != null;
-    private unsafe int GPoseTargetIdx => !HasGposeTarget ? -1 : GposeTarget->ObjectIndex;
+    private static unsafe bool HasGposeTarget => GposeTarget != null;
+    private static unsafe int GPoseTargetIdx => !HasGposeTarget ? -1 : GposeTarget->ObjectIndex;
 
     public async Task<IGameObject?> GetGposeTargetGameObjectAsync()
     {
@@ -391,7 +391,7 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
             DivisionId = divisionId,
             WardId = wardId,
             HouseId = houseId,
-            RoomId = roomId
+            RoomId = roomId,
         };
     }
 
@@ -508,7 +508,7 @@ public class DalamudUtilService : IHostedService, IMediatorSubscriber
             {
                 logger.LogTrace("[{redrawId}] Waiting for {handler} to finish drawing", redrawId, handler);
                 curWaitTime += tick;
-                await Task.Delay(tick).ConfigureAwait(true);
+                await Task.Delay(tick, ct.Value).ConfigureAwait(true);
             }
 
             logger.LogTrace("[{redrawId}] Finished drawing after {curWaitTime}ms", redrawId, curWaitTime);

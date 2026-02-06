@@ -10,23 +10,15 @@ using NotificationType = LaciSynchroni.SyncConfiguration.Models.NotificationType
 
 namespace LaciSynchroni.Services;
 
-public class NotificationService : DisposableMediatorSubscriberBase, IHostedService
+public class NotificationService(ILogger<NotificationService> logger, SyncMediator mediator,
+    DalamudUtilService dalamudUtilService,
+    INotificationManager notificationManager,
+    IChatGui chatGui, SyncConfigService configurationService) : DisposableMediatorSubscriberBase(logger, mediator), IHostedService
 {
-    private readonly DalamudUtilService _dalamudUtilService;
-    private readonly INotificationManager _notificationManager;
-    private readonly IChatGui _chatGui;
-    private readonly SyncConfigService _configurationService;
-
-    public NotificationService(ILogger<NotificationService> logger, SyncMediator mediator,
-        DalamudUtilService dalamudUtilService,
-        INotificationManager notificationManager,
-        IChatGui chatGui, SyncConfigService configurationService) : base(logger, mediator)
-    {
-        _dalamudUtilService = dalamudUtilService;
-        _notificationManager = notificationManager;
-        _chatGui = chatGui;
-        _configurationService = configurationService;
-    }
+    private readonly DalamudUtilService _dalamudUtilService = dalamudUtilService;
+    private readonly INotificationManager _notificationManager = notificationManager;
+    private readonly IChatGui _chatGui = chatGui;
+    private readonly SyncConfigService _configurationService = configurationService;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -126,7 +118,7 @@ public class NotificationService : DisposableMediatorSubscriberBase, IHostedServ
             NotificationType.Error => Dalamud.Interface.ImGuiNotification.NotificationType.Error,
             NotificationType.Warning => Dalamud.Interface.ImGuiNotification.NotificationType.Warning,
             NotificationType.Info => Dalamud.Interface.ImGuiNotification.NotificationType.Info,
-            _ => Dalamud.Interface.ImGuiNotification.NotificationType.Info
+            _ => Dalamud.Interface.ImGuiNotification.NotificationType.Info,
         };
 
         _notificationManager.AddNotification(new Notification()
@@ -135,7 +127,7 @@ public class NotificationService : DisposableMediatorSubscriberBase, IHostedServ
             Title = msg.Title,
             Type = dalamudType,
             Minimized = false,
-            InitialDuration = msg.TimeShownOnScreen ?? TimeSpan.FromSeconds(3)
+            InitialDuration = msg.TimeShownOnScreen ?? TimeSpan.FromSeconds(3),
         });
     }
 }

@@ -49,7 +49,7 @@ public class CharacterData
         {
             return new FileReplacementData()
             {
-                GamePaths = g.SelectMany(f => f.GamePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                GamePaths = [.. g.SelectMany(f => f.GamePaths).Distinct(StringComparer.OrdinalIgnoreCase)],
                 Hash = g.First().Hash,
             };
         }).ToList());
@@ -69,7 +69,7 @@ public class CharacterData
             CustomizePlusData = CustomizePlusScale.ToDictionary(d => d.Key, d => d.Value),
             HonorificData = HonorificData,
             MoodlesData = MoodlesData,
-            PetNamesData = PetNamesData
+            PetNamesData = PetNamesData,
         };
     }
 }

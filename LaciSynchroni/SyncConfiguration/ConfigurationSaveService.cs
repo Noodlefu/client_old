@@ -123,7 +123,7 @@ public class ConfigurationSaveService : IHostedService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _ = Task.Run(() => PeriodicSaveCheck(_configSaveCheckCts.Token));
+        _ = Task.Run(() => PeriodicSaveCheck(_configSaveCheckCts.Token), _configSaveCheckCts.Token);
         return Task.CompletedTask;
     }
 

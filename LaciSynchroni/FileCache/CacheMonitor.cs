@@ -186,7 +186,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
                 | NotifyFilters.DirectoryName
                 | NotifyFilters.Size,
             Filter = "*.*",
-            IncludeSubdirectories = true
+            IncludeSubdirectories = true,
         };
 
         PenumbraWatcher.Deleted += Fs_Changed;
@@ -381,7 +381,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
             })
             {
                 Priority = ThreadPriority.Lowest,
-                IsBackground = true
+                IsBackground = true,
             };
             scanThread.Start();
             while (scanThread.IsAlive)
@@ -531,7 +531,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
 
         if (ct.IsCancellationRequested) return;
 
-        var allScannedFiles = (penumbraFiles.SelectMany(k => k.Value))
+        var allScannedFiles = penumbraFiles.SelectMany(k => k.Value)
             .Concat(allCacheFiles)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToDictionary(t => t.ToLowerInvariant(), t => false, StringComparer.OrdinalIgnoreCase);
@@ -557,7 +557,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
                 new ParallelOptions
                 {
                     MaxDegreeOfParallelism = threadCount,
-                    CancellationToken = ct
+                    CancellationToken = ct,
                 },
                 workload =>
                 {
@@ -639,7 +639,7 @@ public sealed class CacheMonitor : DisposableMediatorSubscriberBase
                 new ParallelOptions()
                 {
                     MaxDegreeOfParallelism = threadCount,
-                    CancellationToken = ct
+                    CancellationToken = ct,
                 }, (cachePath) =>
                 {
                     if (ct.IsCancellationRequested) return;

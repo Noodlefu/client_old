@@ -46,7 +46,7 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
             }
         });
 
-        Mediator.Subscribe<ConnectedMessage>(this, (msg) => PushToAllVisibleUsers(false, msg.serverIndex));
+        Mediator.Subscribe<ConnectedMessage>(this, (msg) => PushToAllVisibleUsers(false, msg.ServerIndex));
         Mediator.Subscribe<DisconnectedMessage>(this, (msg) =>
         {
             _previouslyVisiblePlayers.RemoveAll(key => key.ServerIndex == msg.ServerIndex);
@@ -54,7 +54,7 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
         // When a pair comes online (e.g. reconnects), clear them from the cache so we push data to them again
         Mediator.Subscribe<PairWentOnlineMessage>(this, (msg) =>
         {
-            _previouslyVisiblePlayers.RemoveAll(key => key.UserData.UID == msg.UserKey.UserData.UID && key.ServerIndex == msg.UserKey.ServerIndex);
+            _previouslyVisiblePlayers.RemoveAll(key => string.Equals(key.UserData.UID, msg.UserKey.UserData.UID, StringComparison.Ordinal) && key.ServerIndex == msg.UserKey.ServerIndex);
         });
     }
 
@@ -174,6 +174,6 @@ public class VisibleUserDataDistributor : DisposableMediatorSubscriberBase
                     _pushDataSemaphore.Release();
                 }
             }
-        });
+        }, _runtimeCts.Token);
     }
 }

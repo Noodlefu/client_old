@@ -98,7 +98,7 @@ public class PlayerDataFactory
         return await _dalamudUtil.RunOnFrameworkThread(() => CheckForNullDrawObjectUnsafe(playerPointer)).ConfigureAwait(false);
     }
 
-    private unsafe bool CheckForNullDrawObjectUnsafe(IntPtr playerPointer)
+    private static unsafe bool CheckForNullDrawObjectUnsafe(IntPtr playerPointer)
     {
         if (playerPointer == IntPtr.Zero) return true;
         var character = (Character*)playerPointer;
@@ -310,7 +310,7 @@ public class PlayerDataFactory
         _logger.LogDebug("Validating {count} PAP files against skeleton (mode: {mode})", papFiles.Count, validationMode);
 
         // Create validation context once for all files
-        var validationContext = _modelAnalyzer.CreateValidationContext(boneIndices);
+        var validationContext = XivDataAnalyzer.CreateValidationContext(boneIndices);
 
         int noValidationFailed = 0;
         foreach (var file in papFiles)

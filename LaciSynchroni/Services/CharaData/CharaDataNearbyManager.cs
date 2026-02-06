@@ -8,7 +8,7 @@ using LaciSynchroni.SyncConfiguration;
 using Microsoft.Extensions.Logging;
 using System.Numerics;
 
-namespace LaciSynchroni.Services;
+namespace LaciSynchroni.Services.CharaData;
 
 public sealed class CharaDataNearbyManager : DisposableMediatorSubscriberBase
 {
@@ -245,9 +245,9 @@ public sealed class CharaDataNearbyManager : DisposableMediatorSubscriberBase
         _lastExecutionTime = DateTime.UtcNow;
         if (!ComputeNearbyData && !_charaDataConfigService.Current.NearbyShowAlways)
         {
-            if (_nearbyData.Any())
+            if (_nearbyData.Count != 0)
                 _nearbyData.Clear();
-            if (_poseVfx.Any())
+            if (_poseVfx.Count != 0)
                 ClearAllVfx();
             return;
         }
@@ -267,7 +267,7 @@ public sealed class CharaDataNearbyManager : DisposableMediatorSubscriberBase
     {
         foreach (var data in _nearbyData.Keys)
         {
-            if (_poseVfx.TryGetValue(data, out var _)) continue;
+            if (_poseVfx.ContainsKey(data)) continue;
 
             Guid? vfxGuid;
             if (data.MetaInfo.IsOwnData)

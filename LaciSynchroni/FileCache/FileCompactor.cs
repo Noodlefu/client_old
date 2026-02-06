@@ -6,14 +6,14 @@ using System.Runtime.InteropServices;
 
 namespace LaciSynchroni.FileCache;
 
-public sealed class FileCompactor
+public sealed partial class FileCompactor
 {
     public const uint FSCTL_DELETE_EXTERNAL_BACKING = 0x90314U;
     public const ulong WOF_PROVIDER_FILE = 2UL;
 
     private readonly ConcurrentDictionary<string, int> _clusterSizes;
 
-    private readonly WOF_FILE_COMPRESSION_INFO_V1 _efInfo;
+    private readonly WofFileCompressionInfoV1 _efInfo;
     private readonly ILogger<FileCompactor> _logger;
 
     private readonly SyncConfigService _syncConfigService;
@@ -25,10 +25,10 @@ public sealed class FileCompactor
         _logger = logger;
         _syncConfigService = syncConfigService;
         _dalamudUtilService = dalamudUtilService;
-        _efInfo = new WOF_FILE_COMPRESSION_INFO_V1
+        _efInfo = new WofFileCompressionInfoV1
         {
             Algorithm = CompressionAlgorithm.XPRESS8K,
-            Flags = 0
+            Flags = 0,
         };
     }
 
@@ -39,7 +39,7 @@ public sealed class FileCompactor
         XPRESS4K = 0,
         LZX = 1,
         XPRESS8K = 2,
-        XPRESS16K = 3
+        XPRESS16K = 3,
     }
 
     public bool MassCompactRunning { get; private set; } = false;
@@ -76,7 +76,7 @@ public sealed class FileCompactor
         if (clusterSize == -1) return fileInfo.Length;
         var losize = GetCompressedFileSizeW(fileInfo.FullName, out uint hosize);
         var size = (long)hosize << 32 | losize;
-        return ((size + clusterSize - 1) / clusterSize) * clusterSize;
+        return (size + clusterSize - 1) / clusterSize * clusterSize;
     }
 
     public async Task WriteAllBytesAsync(string filePath, byte[] decompressedFile, CancellationToken token)
@@ -92,23 +92,22 @@ public sealed class FileCompactor
         await Task.Run(() => CompactFile(filePath), CancellationToken.None).ConfigureAwait(false);
     }
 
-    [DllImport("kernel32.dll")]
-    private static extern int DeviceIoControl(IntPtr hDevice, uint dwIoControlCode, IntPtr lpInBuffer, uint nInBufferSize, IntPtr lpOutBuffer, uint nOutBufferSize, out IntPtr lpBytesReturned, out IntPtr lpOverlapped);
+    [LibraryImport("kernel32.dll")]
+    private static partial int DeviceIoControl(IntPtr hDevice, uint dwIoControlCode, IntPtr lpInBuffer, uint nInBufferSize, IntPtr lpOutBuffer, uint nOutBufferSize, out IntPtr lpBytesReturned, out IntPtr lpOverlapped);
 
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCompressedFileSizeW([In, MarshalAs(UnmanagedType.LPWStr)] string lpFileName,
-                                              [Out, MarshalAs(UnmanagedType.U4)] out uint lpFileSizeHigh);
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial uint GetCompressedFileSizeW(string lpFileName, out uint lpFileSizeHigh);
 
-    [DllImport("kernel32.dll", SetLastError = true, PreserveSig = true)]
-    private static extern int GetDiskFreeSpaceW([In, MarshalAs(UnmanagedType.LPWStr)] string lpRootPathName,
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int GetDiskFreeSpaceW(string lpRootPathName,
            out uint lpSectorsPerCluster, out uint lpBytesPerSector, out uint lpNumberOfFreeClusters,
            out uint lpTotalNumberOfClusters);
 
-    [DllImport("WoFUtil.dll")]
-    private static extern int WofIsExternalFile([MarshalAs(UnmanagedType.LPWStr)] string Filepath, out int IsExternalFile, out uint Provider, out WOF_FILE_COMPRESSION_INFO_V1 Info, ref uint BufferLength);
+    [LibraryImport("WoFUtil.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int WofIsExternalFile(string Filepath, out int IsExternalFile, out uint Provider, out WofFileCompressionInfoV1 Info, ref uint BufferLength);
 
-    [DllImport("WofUtil.dll")]
-    private static extern int WofSetFileDataLocation(IntPtr FileHandle, ulong Provider, IntPtr ExternalFileInfo, ulong Length);
+    [LibraryImport("WoFUtil.dll")]
+    private static partial int WofSetFileDataLocation(IntPtr FileHandle, ulong Provider, IntPtr ExternalFileInfo, ulong Length);
 
     private void CompactFile(string filePath)
     {
@@ -151,13 +150,11 @@ public sealed class FileCompactor
         _logger.LogDebug("Removing compression from {file}", path);
         try
         {
-            using (var fs = new FileStream(path, FileMode.Open))
-            {
+            using var fs = new FileStream(path, FileMode.Open);
 #pragma warning disable S3869 // "SafeHandle.DangerousGetHandle" should not be called
-                var hDevice = fs.SafeFileHandle.DangerousGetHandle();
+            var hDevice = fs.SafeFileHandle.DangerousGetHandle();
 #pragma warning restore S3869 // "SafeHandle.DangerousGetHandle" should not be called
-                _ = DeviceIoControl(hDevice, FSCTL_DELETE_EXTERNAL_BACKING, nint.Zero, 0, nint.Zero, 0, out _, out _);
-            }
+            _ = DeviceIoControl(hDevice, FSCTL_DELETE_EXTERNAL_BACKING, nint.Zero, 0, nint.Zero, 0, out _, out _);
         }
         catch (Exception ex)
         {
@@ -171,15 +168,15 @@ public sealed class FileCompactor
         var root = fi.Directory?.Root.FullName.ToLower() ?? string.Empty;
         if (string.IsNullOrEmpty(root)) return -1;
 
-        return _clusterSizes.GetOrAdd(root, rootPath =>
+        return _clusterSizes.GetOrAdd(root, static (rootPath, state) =>
         {
-            _logger.LogDebug("Getting Cluster Size for {path}, root {root}", fi.FullName, rootPath);
+            state._logger.LogDebug("Getting Cluster Size for {path}, root {root}", state.fi.FullName, rootPath);
             int result = GetDiskFreeSpaceW(rootPath, out uint sectorsPerCluster, out uint bytesPerSector, out _, out _);
             if (result == 0) return -1;
             var clusterSize = (int)(sectorsPerCluster * bytesPerSector);
-            _logger.LogDebug("Determined Cluster Size for root {root}: {cluster}", rootPath, clusterSize);
+            state._logger.LogDebug("Determined Cluster Size for root {root}: {cluster}", rootPath, clusterSize);
             return clusterSize;
-        });
+        }, (_logger, fi));
     }
 
     private static bool IsCompactedFile(string filePath)
@@ -197,23 +194,22 @@ public sealed class FileCompactor
         ulong length = (ulong)Marshal.SizeOf(_efInfo);
         try
         {
-            using (var fs = new FileStream(path, FileMode.Open))
-            {
+            using var fs = new FileStream(path, FileMode.Open);
 #pragma warning disable S3869 // "SafeHandle.DangerousGetHandle" should not be called
-                var hFile = fs.SafeFileHandle.DangerousGetHandle();
+            var hFile = fs.SafeFileHandle.DangerousGetHandle();
 #pragma warning restore S3869 // "SafeHandle.DangerousGetHandle" should not be called
-                if (fs.SafeFileHandle.IsInvalid)
+            if (fs.SafeFileHandle.IsInvalid)
+            {
+                _logger.LogWarning("Invalid file handle to {file}", path);
+            }
+            else
+            {
+                var ret = WofSetFileDataLocation(hFile, WOF_PROVIDER_FILE, efInfoPtr, length);
+                if (!(ret == 0 || ret == unchecked((int)0x80070158)))
                 {
-                    _logger.LogWarning("Invalid file handle to {file}", path);
+                    _logger.LogWarning("Failed to compact {file}: {ret}", path, ret.ToString("X"));
                 }
-                else
-                {
-                    var ret = WofSetFileDataLocation(hFile, WOF_PROVIDER_FILE, efInfoPtr, length);
-                    if (!(ret == 0 || ret == unchecked((int)0x80070158)))
-                    {
-                        _logger.LogWarning("Failed to compact {file}: {ret}", path, ret.ToString("X"));
-                    }
-                }
+
             }
         }
         catch (Exception ex)
@@ -226,7 +222,8 @@ public sealed class FileCompactor
         }
     }
 
-    private struct WOF_FILE_COMPRESSION_INFO_V1
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WofFileCompressionInfoV1
     {
         public CompressionAlgorithm Algorithm;
         public ulong Flags;

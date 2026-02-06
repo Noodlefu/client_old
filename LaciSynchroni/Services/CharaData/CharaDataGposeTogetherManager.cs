@@ -61,18 +61,18 @@ public class CharaDataGposeTogetherManager : DisposableMediatorSubscriberBase
         });
         Mediator.Subscribe<ConnectedMessage>(this, (msg) =>
         {
-            if (msg.serverIndex != _dataServerIndex)
+            if (msg.ServerIndex != _dataServerIndex)
             {
                 // Data belongs to a different server, no need to do anything
                 return;
             }
             if (_usersInLobby.Count > 0 && !string.IsNullOrEmpty(CurrentGPoseLobbyId))
             {
-                JoinGPoseLobby(msg.serverIndex, CurrentGPoseLobbyId, isReconnecting: true);
+                JoinGPoseLobby(msg.ServerIndex, CurrentGPoseLobbyId, isReconnecting: true);
             }
             else
             {
-                LeaveGPoseLobby(msg.serverIndex);
+                LeaveGPoseLobby(msg.ServerIndex);
             }
         });
         Mediator.Subscribe<GposeStartMessage>(this, (msg) =>
@@ -168,7 +168,7 @@ public class CharaDataGposeTogetherManager : DisposableMediatorSubscriberBase
                 _ = GposeWorldPositionBackgroundTask(serverIndex, _lobbyCts.Token);
                 _ = GposePoseDataBackgroundTask(serverIndex, _lobbyCts.Token);
             }
-        });
+        }, _lobbyCts.Token);
     }
 
     internal void JoinGPoseLobby(int serverIndex, string joinLobbyId, bool isReconnecting = false)
@@ -198,7 +198,7 @@ public class CharaDataGposeTogetherManager : DisposableMediatorSubscriberBase
                 LastGPoseLobbyId = string.Empty;
                 CurrentGPoseLobbyServerId = null;
             }
-        });
+        }, _lobbyCts.Token);
     }
 
     internal void LeaveGPoseLobby(int serverIndex)
@@ -208,9 +208,9 @@ public class CharaDataGposeTogetherManager : DisposableMediatorSubscriberBase
             var left = await _apiController.GposeLobbyLeave(serverIndex).ConfigureAwait(false);
             if (left)
             {
-               AfterLobbyLeave();
+                AfterLobbyLeave();
             }
-        });
+        }, _lobbyCts.Token);
     }
 
     private void AfterLobbyLeave()
@@ -564,7 +564,7 @@ public class CharaDataGposeTogetherManager : DisposableMediatorSubscriberBase
                     {
                         await _brio.ApplyTransformAsync(kvp.Value.Address, kvp.Value.WorldData.Value).ConfigureAwait(false);
                     }
-                });
+                }, _lobbyCts.Token);
             }
         }
     }

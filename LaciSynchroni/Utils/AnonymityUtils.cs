@@ -11,7 +11,7 @@ public static class AnonymityUtils
             return "";
         }
 
-        var parts = name.Split(" ").Select(s => s.Substring(0, 1));
+        var parts = name.Split(" ").Select(s => s[..1]);
         return String.Join(". ", parts) + ".";
     }
 }

@@ -9,25 +9,15 @@ using System.Collections.Concurrent;
 namespace LaciSynchroni.WebAPI
 {
     using ServerIndex = int;
-    
-    public class MultiConnectTokenService
+
+    public class MultiConnectTokenService(
+        HttpClient httpClient,
+        SyncMediator syncMediator,
+        DalamudUtilService dalamudUtilService,
+        ILoggerFactory loggerFactory,
+        ServerConfigurationManager serverConfigurationManager)
     {
-        private readonly ConcurrentDictionary<ServerIndex, ServerHubTokenProvider> _tokenProviders;
-        private readonly ILoggerFactory _loggerFactory;
-        private readonly ServerConfigurationManager _serverConfigurationManager;
-        private readonly DalamudUtilService _dalamudUtilService;
-        private readonly SyncMediator _syncMediator;
-        private readonly HttpClient _httpClient;
-        
-        public MultiConnectTokenService(HttpClient httpClient, SyncMediator syncMediator, DalamudUtilService dalamudUtilService, ILoggerFactory loggerFactory, ServerConfigurationManager serverConfigurationManager)
-        {
-            _httpClient = httpClient;
-            _syncMediator = syncMediator;
-            _dalamudUtilService = dalamudUtilService;
-            _loggerFactory = loggerFactory;
-            _serverConfigurationManager = serverConfigurationManager;
-            _tokenProviders = new ConcurrentDictionary<ServerIndex, ServerHubTokenProvider>();
-        }
+        private readonly ConcurrentDictionary<ServerIndex, ServerHubTokenProvider> _tokenProviders = new();
 
         public Task<string?> GetCachedToken(ServerIndex serverIndex)
         {
@@ -43,7 +33,7 @@ namespace LaciSynchroni.WebAPI
         {
             return GetTokenProvider(serverIndex).TryUpdateOAuth2LoginTokenAsync(currentServer, forced);
         }
-        
+
         private ServerHubTokenProvider GetTokenProvider(ServerIndex serverIndex)
         {
             return _tokenProviders.GetOrAdd(serverIndex, BuildNewTokenProvider);
@@ -52,12 +42,12 @@ namespace LaciSynchroni.WebAPI
         private ServerHubTokenProvider BuildNewTokenProvider(ServerIndex serverIndex)
         {
             return new ServerHubTokenProvider(
-                _loggerFactory.CreateLogger<ServerHubTokenProvider>(),
+                loggerFactory.CreateLogger<ServerHubTokenProvider>(),
                 serverIndex,
-                _serverConfigurationManager,
-                _dalamudUtilService,
-                _syncMediator,
-                _httpClient
+                serverConfigurationManager,
+                dalamudUtilService,
+                syncMediator,
+                httpClient
             );
         }
     }

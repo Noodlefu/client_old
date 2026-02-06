@@ -4,9 +4,7 @@ using LaciSynchroni.Services.ServerConfiguration;
 using LaciSynchroni.SyncConfiguration.Models;
 using LaciSynchroni.UI;
 using LaciSynchroni.Utils;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System.Data;
 using System.Net;
 using System.Web;
 using NotificationMessage = LaciSynchroni.Services.Mediator.NotificationMessage;
@@ -17,6 +15,7 @@ namespace LaciSynchroni.Interop.Ipc;
 /// Local HTTP server that listens for server join requests via browser links
 /// Inspired by Heliosphere's implementation
 /// </summary>
+#pragma warning disable S2930 // CTS lifecycle managed via CancelDispose() before each reassignment and in Dispose
 public class LocalHttpServer : DisposableMediatorSubscriberBase
 {
     public enum HttpServerState
@@ -30,8 +29,7 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
     private readonly ILogger<LocalHttpServer> _logger;
     private readonly ServerConfigurationManager _serverConfigurationManager;
     private HttpListener? _listener;
-    private CancellationTokenSource _cts = new();
-    private CancellationToken _cancellationToken => _cts.Token;
+    private CancellationTokenSource? _cts;
 
     public HttpServerState State { get; private set; }
 
@@ -52,23 +50,22 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
     {
         if (message.enable && State is HttpServerState.STOPPED or HttpServerState.ERROR)
         {
-            _cts = new();
+            _cts?.CancelDispose();
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
             _ = Task.Run(async () =>
             {
-                await StartAsync(_cancellationToken).ConfigureAwait(false);
-                await Task.Delay(10 * 60 * 1000, _cancellationToken);
-                if (_serverConfigurationManager.ServerIndexes.Any() && !_cancellationToken.IsCancellationRequested)
+                await StartAsync(token).ConfigureAwait(false);
+                await Task.Delay(10 * 60 * 1000, token).ConfigureAwait(false);
+                if (_serverConfigurationManager.ServerIndexes.Any() && !token.IsCancellationRequested)
                 {
-                    await StopAsync(_cancellationToken);
+                    await StopAsync().ConfigureAwait(false);
                 }
-            });
+            }, token);
         }
         else if (!message.enable && State is HttpServerState.STARTED or HttpServerState.ERROR)
         {
-            _ = Task.Run(async () =>
-            {
-                await StopAsync(_cancellationToken).ConfigureAwait(false);
-            });
+            _ = Task.Run(() => StopAsync(), CancellationToken.None);
         }
     }
 
@@ -76,14 +73,17 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
     {
         try
         {
-            await StopAsync(cancellationToken);
+            await StopAsync().ConfigureAwait(false);
             State = HttpServerState.STARTING;
-            _cts = new();
+            _cts?.CancelDispose();
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
+
             _listener = new HttpListener();
             _listener.Prefixes.Add($"{PluginHttpServerData.Hostname}:{PluginHttpServerData.Port}/");
             _listener.Start();
 
-            _ = Task.Run(() => ListenAsync(_cancellationToken), _cancellationToken);
+            _ = Task.Run(() => ListenAsync(token), token);
 
             State = HttpServerState.STARTED;
 
@@ -102,7 +102,7 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public Task StopAsync()
     {
         if (State == HttpServerState.STOPPED)
         {
@@ -110,8 +110,10 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
         }
         try
         {
-            _cts.CancelDispose();
+            _cts?.CancelDispose();
+            _cts = null;
             _listener?.Close();
+            _listener = null;
 
             State = HttpServerState.STOPPED;
 
@@ -127,11 +129,15 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
 
     protected override void Dispose(bool disposing)
     {
-        base.Dispose(true);
-        if (State == HttpServerState.STARTED)
+        if (disposing && State != HttpServerState.STOPPED)
         {
-            _ = StopAsync(_cancellationToken);
+            _cts?.CancelDispose();
+            _cts = null;
+            try { _listener?.Close(); } catch { /* best-effort */ }
+            _listener = null;
+            State = HttpServerState.STOPPED;
         }
+        base.Dispose(disposing);
     }
 
     private async Task ListenAsync(CancellationToken token)
@@ -145,12 +151,10 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
             }
             catch (HttpListenerException) when (token.IsCancellationRequested)
             {
-                // Expected when shutting down
                 break;
             }
             catch (ObjectDisposedException) when (token.IsCancellationRequested)
             {
-                // Expected when shutting down
                 break;
             }
             catch (Exception ex)
@@ -170,7 +174,6 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
 
             _logger.LogInformation("Received request: {Method} {Url}", request.HttpMethod, request.Url);
 
-            // Parse the request URL
             var path = request.Url?.AbsolutePath.TrimStart('/');
 
             if (string.IsNullOrEmpty(path))
@@ -186,7 +189,7 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
                 return;
             }
 
-            var action = parts[1].ToLowerInvariant();
+            var action = parts[1];
             var queryParams = HttpUtility.ParseQueryString(request.Url?.Query ?? string.Empty);
 
             if (string.Equals(action, "join", StringComparison.OrdinalIgnoreCase))
@@ -227,14 +230,12 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
             return;
         }
 
-        // Normalize the base URI (remove trailing slashes and /hub if present)
         var normalizedUri = serverUri.TrimEnd('/');
         if (normalizedUri.EndsWith("/hub", StringComparison.OrdinalIgnoreCase))
         {
-            normalizedUri = normalizedUri.Substring(0, normalizedUri.Length - 4).TrimEnd('/');
+            normalizedUri = normalizedUri[..^4].TrimEnd('/');
         }
 
-        // Check if server already exists
         var existingServers = _serverConfigurationManager.GetServerInfo();
         var existingServerWithUri = existingServers.FirstOrDefault(s => string.Equals(s.Uri, normalizedUri, StringComparison.OrdinalIgnoreCase));
         if (existingServerWithUri != null)
@@ -244,16 +245,14 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
             return;
         }
 
-        // Create server storage object - matches the pattern from add server UI
         var newServer = new ServerStorage
         {
             ServerUri = normalizedUri,
             UseOAuth2 = true,
             UseAdvancedUris = false,
-            SecretKeys = { { 0, new SecretKey() { FriendlyName = $"Secret Key added on Setup ({DateTime.Now:yyyy-MM-dd})", Key = secretKey ?? string.Empty } } }
+            SecretKeys = { { 0, new SecretKey() { FriendlyName = $"Secret Key added on Setup ({DateTime.Now:yyyy-MM-dd})", Key = secretKey ?? string.Empty } } },
         };
 
-        // Publish message to show confirmation UI
         Mediator.Publish(new ServerJoinRequestMessage(newServer));
 
         _logger.LogInformation("Server join request created for {ServerUri}", normalizedUri);
@@ -276,13 +275,3 @@ public class LocalHttpServer : DisposableMediatorSubscriberBase
         }
     }
 }
-
-/// <summary>
-/// Message published when a server join is requested via URI
-/// </summary>
-public record ServerJoinRequestMessage(ServerStorage ServerStorage) : MessageBase;
-
-/// <summary>
-/// Message published when the state of the
-/// </summary>
-public record HttpServerToggleMessage(bool enable) : MessageBase;

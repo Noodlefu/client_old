@@ -166,7 +166,7 @@ public sealed class IpcCallerPenumbra : IpcCallerBase
             logger.LogInformation("Converting Texture {Key} to {Type}", texture.Key, TextureType.Bc7Tex);
             var convertTask = _penumbraConvertTextureFile.Invoke(texture.Key, texture.Key, TextureType.Bc7Tex, mipMaps: true);
             await convertTask.ConfigureAwait(false);
-            if (convertTask.IsCompletedSuccessfully && texture.Value.Any())
+            if (convertTask.IsCompletedSuccessfully && texture.Value.Length != 0)
             {
                 foreach (var duplicatedTexture in texture.Value)
                 {

@@ -5,20 +5,12 @@ using System.Text;
 
 namespace LaciSynchroni.Interop;
 
-internal sealed class DalamudLogger : ILogger
+internal sealed class DalamudLogger(string name, SyncConfigService syncConfigService, IPluginLog pluginLog, bool hasModifiedGameFiles) : ILogger
 {
-    private readonly SyncConfigService _syncConfigService;
-    private readonly string _name;
-    private readonly IPluginLog _pluginLog;
-    private readonly bool _hasModifiedGameFiles;
-
-    public DalamudLogger(string name, SyncConfigService syncConfigService, IPluginLog pluginLog, bool hasModifiedGameFiles)
-    {
-        _name = name;
-        _syncConfigService = syncConfigService;
-        _pluginLog = pluginLog;
-        _hasModifiedGameFiles = hasModifiedGameFiles;
-    }
+    private readonly SyncConfigService _syncConfigService = syncConfigService;
+    private readonly string _name = name;
+    private readonly IPluginLog _pluginLog = pluginLog;
+    private readonly bool _hasModifiedGameFiles = hasModifiedGameFiles;
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 

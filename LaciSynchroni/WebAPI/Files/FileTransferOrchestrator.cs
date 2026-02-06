@@ -49,7 +49,7 @@ public class FileTransferOrchestrator : DisposableMediatorSubscriberBase
         Mediator.Subscribe<ConnectedMessage>(this, (msg) =>
         {
             var newUri = msg.Connection.ServerInfo.FileServerAddress;
-            _cdnUris.AddOrUpdate(msg.serverIndex, i => newUri, (i, uri) => newUri);
+            _cdnUris.AddOrUpdate(msg.ServerIndex, i => newUri, (i, uri) => newUri);
         });
 
         Mediator.Subscribe<DisconnectedMessage>(this, (msg) =>

@@ -34,12 +34,8 @@ public record Event
     {
         if (string.IsNullOrEmpty(UID))
             return $"{EventTime:HH:mm:ss.fff}\t[{EventSource}]{{{(int)EventSeverity}}}\t{Message}";
-        else
-        {
-            if (string.IsNullOrEmpty(Character))
-                return $"{EventTime:HH:mm:ss.fff}\t[{EventSource}]{{{(int)EventSeverity}}}\t<{UID}> {Message}";
-            else
-                return $"{EventTime:HH:mm:ss.fff}\t[{EventSource}]{{{(int)EventSeverity}}}\t<{UID}\\{Character}> {Message}";
-        }
+        if (string.IsNullOrEmpty(Character))
+            return $"{EventTime:HH:mm:ss.fff}\t[{EventSource}]{{{(int)EventSeverity}}}\t<{UID}> {Message}";
+        return $"{EventTime:HH:mm:ss.fff}\t[{EventSource}]{{{(int)EventSeverity}}}\t<{UID}\\{Character}> {Message}";
     }
 }

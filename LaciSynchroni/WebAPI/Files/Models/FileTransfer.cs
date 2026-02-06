@@ -2,16 +2,10 @@
 
 namespace LaciSynchroni.WebAPI.Files.Models;
 
-public abstract class FileTransfer
+public abstract class FileTransfer(ITransferFileDto transferDto, int serverIndex)
 {
-    protected readonly ITransferFileDto TransferDto;
-    public readonly int ServerIndex;
-
-    protected FileTransfer(ITransferFileDto transferDto, int serverIndex)
-    {
-        TransferDto = transferDto;
-        ServerIndex = serverIndex;
-    }
+    protected readonly ITransferFileDto TransferDto = transferDto;
+    public readonly int ServerIndex = serverIndex;
 
     public virtual bool CanBeTransferred => !TransferDto.IsForbidden && (TransferDto is not DownloadFileDto dto || dto.FileExists);
     public string ForbiddenBy => TransferDto.ForbiddenBy;

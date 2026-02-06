@@ -15,7 +15,7 @@ public class EventAggregator : MediatorSubscriberBase, IHostedService
     public Lazy<List<Event>> EventList { get; private set; }
     public bool NewEventsAvailable => !EventList.IsValueCreated;
     public string EventLogFolder => Path.Combine(_configDirectory, "eventlog");
-    private string CurrentLogName => $"{DateTime.Now:yyyy-MM-dd}-events.log";
+    private static string CurrentLogName => $"{DateTime.Now:yyyy-MM-dd}-events.log";
     private DateTime _currentTime;
 
     public EventAggregator(string configDirectory, ILogger<EventAggregator> logger, SyncMediator syncMediator) : base(logger, syncMediator)

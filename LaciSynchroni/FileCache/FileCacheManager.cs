@@ -12,20 +12,20 @@ using System.Text;
 
 namespace LaciSynchroni.FileCache;
 
-public sealed class FileCacheManager : IHostedService
+public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManager ipcManager, SyncConfigService configService, SyncMediator syncMediator) : IHostedService
 {
     public const string CachePrefix = "{cache}";
     public const string CsvSplit = "|";
     public const string PenumbraPrefix = "{penumbra}";
-    private readonly SyncConfigService _configService;
-    private readonly SyncMediator _syncMediator;
-    private readonly string _csvPath;
+    private readonly SyncConfigService _configService = configService;
+    private readonly SyncMediator _syncMediator = syncMediator;
+    private readonly string _csvPath = Path.Combine(configService.ConfigurationDirectory, "FileCache.csv");
     private readonly ConcurrentDictionary<string, List<FileCacheEntity>> _fileCaches = new(StringComparer.Ordinal);
     private readonly Lock _fileCachesLock = new();
     private readonly SemaphoreSlim _getCachesByPathsSemaphore = new(1, 1);
     private readonly Lock _fileWriteLock = new();
-    private readonly IpcManager _ipcManager;
-    private readonly ILogger<FileCacheManager> _logger;
+    private readonly IpcManager _ipcManager = ipcManager;
+    private readonly ILogger<FileCacheManager> _logger = logger;
 
     /// <summary>
     /// Cache for file validation results to avoid repeated FileInfo.Exists calls.
@@ -49,28 +49,14 @@ public sealed class FileCacheManager : IHostedService
     /// <summary>
     /// Tracks information about a pending download, including waiter count for handoff support.
     /// </summary>
-    private sealed class PendingDownloadInfo
+    private sealed class PendingDownloadInfo(TaskCompletionSource<string?> tcs)
     {
-        public TaskCompletionSource<string?> Tcs { get; set; }
-        public int WaiterCount { get; set; }
+        public TaskCompletionSource<string?> Tcs { get; set; } = tcs;
+        public int WaiterCount { get; set; } = 1; // The downloader counts as 1
 
-        public PendingDownloadInfo(TaskCompletionSource<string?> tcs)
-        {
-            Tcs = tcs;
-            WaiterCount = 1; // The downloader counts as 1
-        }
     }
 
     public string CacheFolder => _configService.Current.CacheFolder;
-
-    public FileCacheManager(ILogger<FileCacheManager> logger, IpcManager ipcManager, SyncConfigService configService, SyncMediator syncMediator)
-    {
-        _logger = logger;
-        _ipcManager = ipcManager;
-        _configService = configService;
-        _syncMediator = syncMediator;
-        _csvPath = Path.Combine(configService.ConfigurationDirectory, "FileCache.csv");
-    }
 
     private string CsvBakPath => _csvPath + ".bak";
 
@@ -134,7 +120,7 @@ public sealed class FileCacheManager : IHostedService
 
         // Build prefixed path by replacing the mod directory with the prefix
         var relativePath = fullName[modDirectory.Length..].TrimStart('\\');
-        string prefixedPath = PenumbraPrefix + "\\" + relativePath;
+        string prefixedPath = $"{PenumbraPrefix}\\{relativePath}";
         return CreateFileCacheEntity(fi, prefixedPath);
     }
 
@@ -142,7 +128,7 @@ public sealed class FileCacheManager : IHostedService
     {
         lock (_fileCachesLock)
         {
-            return _fileCaches.Values.SelectMany(v => v).ToList();
+            return [.. _fileCaches.Values.SelectMany(v => v)];
         }
     }
 
@@ -156,7 +142,7 @@ public sealed class FileCacheManager : IHostedService
             {
                 return output;
             }
-            entitiesToProcess = fileCacheEntities.Where(c => !ignoreCacheEntries || !c.IsCacheEntry).ToList();
+            entitiesToProcess = [.. fileCacheEntities.Where(c => !ignoreCacheEntries || !c.IsCacheEntry)];
         }
 
         foreach (var fileCache in entitiesToProcess)
@@ -179,7 +165,7 @@ public sealed class FileCacheManager : IHostedService
         List<FileCacheEntity> cacheEntries;
         lock (_fileCachesLock)
         {
-            cacheEntries = _fileCaches.SelectMany(v => v.Value).Where(v => v.IsCacheEntry).ToList();
+            cacheEntries = [.. _fileCaches.SelectMany(v => v.Value).Where(v => v.IsCacheEntry)];
         }
 
         var brokenEntities = new ConcurrentBag<FileCacheEntity>();
@@ -190,7 +176,7 @@ public sealed class FileCacheManager : IHostedService
         var parallelOptions = new ParallelOptions
         {
             MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
-            CancellationToken = cancellationToken
+            CancellationToken = cancellationToken,
         };
 
         try
@@ -485,8 +471,6 @@ public sealed class FileCacheManager : IHostedService
 
             foreach (var entry in cleanedPaths)
             {
-                //_logger.LogDebug("Checking {path}", entry.Value);
-
                 if (dict.TryGetValue(entry.Value, out var entity))
                 {
                     var validatedCache = GetValidatedFileCache(entity);
@@ -526,7 +510,7 @@ public sealed class FileCacheManager : IHostedService
 
                 if (caches?.Count == 0)
                 {
-                    _fileCaches.Remove(hash, out var entity);
+                    _fileCaches.Remove(hash, out _);
                 }
             }
         }
@@ -637,7 +621,6 @@ public sealed class FileCacheManager : IHostedService
 
             if (!entries.Exists(u => string.Equals(u.PrefixedFilePath, fileCache.PrefixedFilePath, StringComparison.OrdinalIgnoreCase)))
             {
-                //_logger.LogTrace("Adding to DB: {hash} => {path}", fileCache.Hash, fileCache.PrefixedFilePath);
                 entries.Add(fileCache);
             }
         }
@@ -661,7 +644,6 @@ public sealed class FileCacheManager : IHostedService
     private FileCacheEntity? GetValidatedFileCache(FileCacheEntity fileCache)
     {
         var resultingFileCache = ReplacePathPrefixes(fileCache);
-        //_logger.LogTrace("Validating {path}", fileCache.PrefixedFilePath);
         resultingFileCache = Validate(resultingFileCache);
         return resultingFileCache;
     }
@@ -834,7 +816,7 @@ public sealed class FileCacheManager : IHostedService
                 try
                 {
                     _logger.LogInformation("Attempting to read {CsvPath}", _csvPath);
-                    entries = File.ReadAllLines(_csvPath);
+                    entries = await File.ReadAllLinesAsync(_csvPath, cancellationToken).ConfigureAwait(false);
                     success = true;
                 }
                 catch (Exception ex)

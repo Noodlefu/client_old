@@ -11,31 +11,21 @@ using Microsoft.Extensions.Logging;
 
 namespace LaciSynchroni.PlayerData.Pairs;
 
-public class Pair
+public class Pair(ILogger<Pair> logger, UserFullPairDto userPair, PairHandlerFactory cachedPlayerFactory,
+    SyncMediator mediator, ServerConfigurationManager serverConfigurationManager, int serverIndex)
 {
-    private readonly PairHandlerFactory _cachedPlayerFactory;
+    private readonly PairHandlerFactory _cachedPlayerFactory = cachedPlayerFactory;
     private readonly SemaphoreSlim _creationSemaphore = new(1);
-    private readonly ILogger<Pair> _logger;
-    private readonly SyncMediator _mediator;
-    private readonly ServerConfigurationManager _serverConfigurationManager;
+    private readonly ILogger<Pair> _logger = logger;
+    private readonly SyncMediator _mediator = mediator;
+    private readonly ServerConfigurationManager _serverConfigurationManager = serverConfigurationManager;
     /// <summary>
     /// The server from which this pair originates
     /// </summary>
-    public readonly int ServerIndex;
+    public readonly int ServerIndex = serverIndex;
     private CancellationTokenSource _applicationCts = new();
     private OnlineUserIdentDto? _onlineUserIdentDto = null;
     private ushort? _visibleHomeWorldId;
-
-    public Pair(ILogger<Pair> logger, UserFullPairDto userPair, PairHandlerFactory cachedPlayerFactory,
-        SyncMediator mediator, ServerConfigurationManager serverConfigurationManager, int serverIndex)
-    {
-        _logger = logger;
-        UserPair = userPair;
-        _cachedPlayerFactory = cachedPlayerFactory;
-        _mediator = mediator;
-        _serverConfigurationManager = serverConfigurationManager;
-        ServerIndex = serverIndex;
-    }
 
     public bool HasCachedPlayer => CachedPlayer != null && !string.IsNullOrEmpty(CachedPlayer.PlayerName) && _onlineUserIdentDto != null;
     public IndividualPairStatus IndividualPairStatus => UserPair.IndividualPairStatus;
@@ -56,7 +46,7 @@ public class Pair
 
     public UserData UserData => UserPair.User;
 
-    public UserFullPairDto UserPair { get; set; }
+    public UserFullPairDto UserPair { get; set; } = userPair;
     private PairHandler? CachedPlayer { get; set; }
 
     /// <summary>
@@ -88,7 +78,7 @@ public class Pair
                     _logger.LogDebug("Applying delayed data for {uid}", data.User.UID);
                     ApplyLastReceivedData();
                 }
-            });
+            }, _applicationCts.Token);
             return;
         }
 
@@ -143,7 +133,7 @@ public class Pair
 
     public bool HasAnyConnection()
     {
-        return UserPair.Groups.Any() || UserPair.IndividualPairStatus != IndividualPairStatus.None;
+        return UserPair.Groups.Count != 0 || UserPair.IndividualPairStatus != IndividualPairStatus.None;
     }
 
     public void MarkOffline(bool wait = true)
@@ -208,11 +198,10 @@ public class Pair
                 disableIndividualAnimations, disableIndividualSounds, disableIndividualVFX);
             foreach (var objectKind in data.FileReplacements.Select(k => k.Key))
             {
-                data.FileReplacements[objectKind] = data.FileReplacements[objectKind]
+                data.FileReplacements[objectKind] = [.. data.FileReplacements[objectKind]
                     .Where(f => (!disableIndividualSounds || !f.GamePaths.Any(p => p.EndsWith("scd", StringComparison.OrdinalIgnoreCase)))
                         && (!disableIndividualAnimations || !f.GamePaths.Any(p => p.EndsWith("tmb", StringComparison.OrdinalIgnoreCase) || p.EndsWith("pap", StringComparison.OrdinalIgnoreCase)))
-                        && (!disableIndividualVFX || !f.GamePaths.Any(p => p.EndsWith("atex", StringComparison.OrdinalIgnoreCase) || p.EndsWith("avfx", StringComparison.OrdinalIgnoreCase))))
-                    .ToList();
+                        && (!disableIndividualVFX || !f.GamePaths.Any(p => p.EndsWith("atex", StringComparison.OrdinalIgnoreCase) || p.EndsWith("avfx", StringComparison.OrdinalIgnoreCase)))),];
             }
         }
 

@@ -6,7 +6,7 @@ using LaciSynchroni.Services.CharaData.Models;
 using LaciSynchroni.Services.Mediator;
 using Microsoft.Extensions.Logging;
 
-namespace LaciSynchroni.Services;
+namespace LaciSynchroni.Services.CharaData;
 
 public sealed class CharaDataCharacterHandler : DisposableMediatorSubscriberBase
 {
