@@ -4,6 +4,7 @@ using Dalamud.Plugin.Ipc;
 using LaciSynchroni.Services;
 using LaciSynchroni.Services.Mediator;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using System.Text;
 
 namespace LaciSynchroni.Interop.Ipc;
@@ -17,6 +18,7 @@ public sealed class IpcCallerHonorific : IpcCallerBase
     private readonly ICallGateSubscriber<string, object> _honorificLocalCharacterTitleChanged;
     private readonly ICallGateSubscriber<object> _honorificReady;
     private readonly ICallGateSubscriber<int, string, object> _honorificSetCharacterTitle;
+    private readonly ConcurrentDictionary<int, string> _appliedTitleByIndex = new();
 
     protected override string TargetPluginName => "Honorific";
 
@@ -51,6 +53,11 @@ public sealed class IpcCallerHonorific : IpcCallerBase
         }
     }
 
+    public void ClearTitleCacheForObjectIndex(int objectIndex)
+    {
+        _appliedTitleByIndex.TryRemove(objectIndex, out _);
+    }
+
     public async Task ClearTitleAsync(nint character)
     {
         await SafeInvokeAsync(async () =>
@@ -62,6 +69,7 @@ public sealed class IpcCallerHonorific : IpcCallerBase
                 {
                     Logger.LogTrace("Honorific removing for {addr}", c.Address.ToString("X"));
                     _honorificClearCharacterTitle!.InvokeAction(c.ObjectIndex);
+                    ClearTitleCacheForObjectIndex(c.ObjectIndex);
                 }
             }).ConfigureAwait(false);
         }).ConfigureAwait(false);
@@ -85,6 +93,13 @@ public sealed class IpcCallerHonorific : IpcCallerBase
                 var gameObj = DalamudUtil.CreateGameObject(character);
                 if (gameObj is IPlayerCharacter pc)
                 {
+                    if (_appliedTitleByIndex.TryGetValue(pc.ObjectIndex, out var cached) &&
+                        string.Equals(cached, honorificDataB64, StringComparison.Ordinal))
+                    {
+                        Logger.LogTrace("Honorific unchanged for {addr}, skipping IPC", pc.Address.ToString("X"));
+                        return;
+                    }
+
                     string honorificData = string.IsNullOrEmpty(honorificDataB64) ? string.Empty : Encoding.UTF8.GetString(Convert.FromBase64String(honorificDataB64));
                     if (string.IsNullOrEmpty(honorificData))
                     {
@@ -94,6 +109,7 @@ public sealed class IpcCallerHonorific : IpcCallerBase
                     {
                         _honorificSetCharacterTitle!.InvokeAction(pc.ObjectIndex, honorificData);
                     }
+                    _appliedTitleByIndex[pc.ObjectIndex] = honorificDataB64;
                 }
             }).ConfigureAwait(false);
         }).ConfigureAwait(false);

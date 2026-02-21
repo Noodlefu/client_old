@@ -23,6 +23,7 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
     private readonly ConcurrentDictionary<string, List<FileCacheEntity>> _fileCaches = new(StringComparer.Ordinal);
     private readonly Lock _fileCachesLock = new();
     private readonly SemaphoreSlim _getCachesByPathsSemaphore = new(1, 1);
+    private readonly SemaphoreSlim _decompressionSemaphore = new(Math.Clamp(Environment.ProcessorCount / 2, 1, 4), Math.Clamp(Environment.ProcessorCount / 2, 1, 4));
     private readonly Lock _fileWriteLock = new();
     private readonly IpcManager _ipcManager = ipcManager;
     private readonly ILogger<FileCacheManager> _logger = logger;
@@ -45,6 +46,13 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
     /// Lock for coordinating pending download handoffs.
     /// </summary>
     private readonly Lock _pendingDownloadsLock = new();
+
+    /// <summary>
+    /// Queue of CSV entry strings pending a flush to disk.
+    /// Entries are batched and written by a background timer to avoid per-entry I/O during scanning.
+    /// </summary>
+    private readonly ConcurrentQueue<string> _pendingCsvEntries = new();
+    private Timer? _csvFlushTimer;
 
     /// <summary>
     /// Tracks information about a pending download, including waiter count for handoff support.
@@ -207,7 +215,23 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
 
                 try
                 {
-                    var computedHash = await Task.Run(() => Crypto.GetFileHash(fileCache.ResolvedFilepath), ct).ConfigureAwait(false);
+                    string computedHash;
+                    if (fileCache.ResolvedFilepath.EndsWith(".llz4", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await _decompressionSemaphore.WaitAsync(ct).ConfigureAwait(false);
+                        try
+                        {
+                            var compressed = await File.ReadAllBytesAsync(fileCache.ResolvedFilepath, ct).ConfigureAwait(false);
+                            var decompressed = LZ4Wrapper.Unwrap(compressed);
+                            computedHash = Crypto.GetHashFromBytes(decompressed);
+                        }
+                        finally { _decompressionSemaphore.Release(); }
+                    }
+                    else
+                    {
+                        computedHash = await Task.Run(() => Crypto.GetFileHash(fileCache.ResolvedFilepath), ct).ConfigureAwait(false);
+                    }
+
                     if (!string.Equals(computedHash, fileCache.Hash, StringComparison.Ordinal))
                     {
                         _logger.LogInformation("Failed to validate {File}, got hash {ActualHash}, expected hash {ExpectedHash}",
@@ -573,10 +597,25 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
         return (FileState.Valid, fileCache);
     }
 
+    private void FlushPendingCsvEntries()
+    {
+        if (_pendingCsvEntries.IsEmpty) return;
+        var entries = new List<string>();
+        while (_pendingCsvEntries.TryDequeue(out var entry))
+            entries.Add(entry);
+        if (entries.Count == 0) return;
+        lock (_fileWriteLock)
+        {
+            File.AppendAllLines(_csvPath, entries);
+        }
+    }
+
     public void WriteOutFullCsv()
     {
         lock (_fileWriteLock)
         {
+            // Drain the pending queue — full rewrite covers all entries already in _fileCaches
+            while (_pendingCsvEntries.TryDequeue(out _)) { }
             StringBuilder sb = new();
             List<FileCacheEntity> entries;
             lock (_fileCachesLock)
@@ -648,10 +687,7 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
         var entity = new FileCacheEntity(hash, prefixedPath, fileInfo.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture), fileInfo.Length);
         entity = ReplacePathPrefixes(entity);
         AddHashedFile(entity);
-        lock (_fileWriteLock)
-        {
-            File.AppendAllLines(_csvPath, new[] { entity.CsvEntry });
-        }
+        _pendingCsvEntries.Enqueue(entity.CsvEntry);
         var result = GetFileCacheByPath(fileInfo.FullName);
         _logger.LogTrace("Creating cache entity for {name} success: {success}", fileInfo.FullName, (result != null));
         return result;
@@ -897,11 +933,14 @@ public sealed class FileCacheManager(ILogger<FileCacheManager> logger, IpcManage
             }
         }
 
+        _csvFlushTimer = new Timer(_ => FlushPendingCsvEntries(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
         _logger.LogInformation("Started FileCacheManager");
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
+        _csvFlushTimer?.Dispose();
+        _csvFlushTimer = null;
         WriteOutFullCsv();
         return Task.CompletedTask;
     }

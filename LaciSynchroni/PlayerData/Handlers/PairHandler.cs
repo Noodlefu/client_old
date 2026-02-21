@@ -9,6 +9,7 @@ using LaciSynchroni.Services;
 using LaciSynchroni.Services.Events;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.Services.ServerConfiguration;
+using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.SyncConfiguration.Models;
 using LaciSynchroni.Utils;
 using LaciSynchroni.WebAPI.Files;
@@ -45,10 +46,12 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     private CombatData? _dataReceivedInDowntime;
     private CancellationTokenSource? _downloadCancellationTokenSource = new();
     private bool _forceApplyMods = false;
+    private bool _forceApplyCustomization = false;
     private bool _isVisible;
     private Guid _penumbraCollection;
     private bool _redrawOnNextApplication = false;
     private readonly ServerStorage _serverInfo;
+    private readonly SyncConfigService _syncConfigService;
 
     public PairHandler(ILogger<PairHandler> logger, Pair pair,
         GameObjectHandlerFactory gameObjectHandlerFactory,
@@ -58,7 +61,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         FileCacheManager fileDbManager, SyncMediator mediator,
         PlayerPerformanceService playerPerformanceService,
         ServerConfigurationManager serverConfigManager, ConcurrentPairLockService concurrentPairLockService,
-        FileTransferOrchestrator transferOrchestrator) : base(logger, mediator)
+        FileTransferOrchestrator transferOrchestrator, SyncConfigService syncConfigService) : base(logger, mediator)
     {
         Pair = pair;
         _gameObjectHandlerFactory = gameObjectHandlerFactory;
@@ -72,6 +75,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         _serverConfigManager = serverConfigManager;
         _concurrentPairLockService = concurrentPairLockService;
         _transferOrchestrator = transferOrchestrator;
+        _syncConfigService = syncConfigService;
         _penumbraCollection = _ipcManager.Penumbra.CreateTemporaryCollectionAsync(logger, Pair.UserData.UID).ConfigureAwait(false).GetAwaiter().GetResult();
         _serverInfo = _serverConfigManager.GetServerByIndex(Pair.ServerIndex);
 
@@ -182,7 +186,9 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         Logger.LogDebug("[BASE-{appbase}] Applying data for {player}, forceApplyCustomization: {forced}, forceApplyMods: {forceMods}", applicationBase, this, forceApplyCustomization, _forceApplyMods);
         Logger.LogDebug("[BASE-{appbase}] Hash for data is {newHash}, current cache hash is {oldHash}", applicationBase, characterData.DataHash.Value, _cachedData?.DataHash.Value ?? "NODATA");
 
-        if (string.Equals(characterData.DataHash.Value, _cachedData?.DataHash.Value ?? string.Empty, StringComparison.Ordinal) && !forceApplyCustomization)
+        _forceApplyCustomization |= forceApplyCustomization;
+
+        if (string.Equals(characterData.DataHash.Value, _cachedData?.DataHash.Value ?? string.Empty, StringComparison.Ordinal) && !_forceApplyCustomization)
         {
             // Even if the data hash matches, check if any required files are missing from cache
             // This handles the case where storage was cleared but character data is still cached in memory
@@ -224,7 +230,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
         _forceApplyMods |= forceApplyCustomization;
 
-        var charaDataToUpdate = characterData.CheckUpdatedData(applicationBase, _cachedData?.DeepClone() ?? new(), Logger, this, forceApplyCustomization, _forceApplyMods);
+        var charaDataToUpdate = characterData.CheckUpdatedData(applicationBase, _cachedData?.DeepClone() ?? new(), Logger, this, _forceApplyCustomization, _forceApplyMods);
 
         if (_charaHandler != null && _forceApplyMods)
         {
@@ -576,6 +582,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             }
 
             _cachedData = charaData;
+            _forceApplyCustomization = false;
 
             Logger.LogDebug("[{applicationId}] Application finished", _applicationId);
         }
@@ -797,6 +804,9 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
                     foreach (var gamePath in item.GamePaths)
                     {
+                        if (_syncConfigService.Current.BlockCharacterLegacyShpk &&
+                            string.Equals(Path.GetFileName(gamePath), "characterlegacy.shpk", StringComparison.OrdinalIgnoreCase))
+                            continue;
                         outputDict[(gamePath, item.Hash)] = fileCache.ResolvedFilepath;
                     }
                 }
@@ -813,6 +823,9 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             {
                 foreach (var gamePath in item.GamePaths)
                 {
+                    if (_syncConfigService.Current.BlockCharacterLegacyShpk &&
+                        string.Equals(Path.GetFileName(gamePath), "characterlegacy.shpk", StringComparison.OrdinalIgnoreCase))
+                        continue;
                     Logger.LogTrace("[BASE-{appBase}] Adding file swap for {path}: {fileSwap}", applicationBase, gamePath, item.FileSwapPath);
                     moddedDictionary[(gamePath, null)] = item.FileSwapPath;
                 }

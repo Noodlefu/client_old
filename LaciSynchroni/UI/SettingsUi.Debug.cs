@@ -139,6 +139,14 @@ public partial class SettingsUi
             _uiShared.DrawHelpText("Allows bone indices that are off by one from valid indices. "
                 + "Only applies in Safe mode.");
         }
+
+        bool blockLegacyShpk = _configService.Current.BlockCharacterLegacyShpk;
+        if (ImGui.Checkbox("Block inbound characterlegacy.shpk (prevents crashes)", ref blockLegacyShpk))
+        {
+            _configService.Current.BlockCharacterLegacyShpk = blockLegacyShpk;
+            _configService.Save();
+        }
+        _uiShared.DrawHelpText("Filters out characterlegacy.shpk shader files received from other players. Enable this if you experience crashes related to character shaders.");
     }
 
     private void DrawFileStorageSettings()

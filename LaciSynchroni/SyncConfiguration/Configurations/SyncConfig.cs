@@ -12,6 +12,7 @@ public class SyncConfig : ISyncConfiguration
     public AnimationValidationMode AnimationValidationMode { get; set; } = AnimationValidationMode.Unsafe;
     public bool AnimationAllowOneBasedShift { get; set; } = false;
     public bool AnimationAllowNeighborIndexTolerance { get; set; } = false;
+    public bool BlockCharacterLegacyShpk { get; set; } = false;
     public string CacheFolder { get; set; } = string.Empty;
     public bool DisableOptionalPluginWarnings { get; set; } = false;
     public bool EnableDtrEntry { get; set; } = false;

@@ -21,6 +21,12 @@ public static class Crypto
         return Convert.ToHexString(hashBytes);  // Single allocation, returns uppercase hex
     }
 
+    public static string GetHashFromBytes(byte[] data)
+    {
+        var hashBytes = SHA1.HashData(data);
+        return Convert.ToHexString(hashBytes);
+    }
+
     public static string GetHash256(this (string, ushort) playerToHash)
     {
         if (_hashListPlayersSHA256.TryGetValue(playerToHash, out var hash) && hash != null)

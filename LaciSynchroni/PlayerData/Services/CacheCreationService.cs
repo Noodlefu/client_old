@@ -13,7 +13,6 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
     private readonly SemaphoreSlim _cacheCreateLock = new(1);
     private readonly HashSet<ObjectKind> _cachesToCreate = [];
     private readonly PlayerDataFactory _characterDataFactory;
-    private readonly HashSet<ObjectKind> _currentlyCreating = [];
     private readonly HashSet<ObjectKind> _debouncedObjectCache = [];
     private readonly CharacterData _playerData = new();
     private readonly Dictionary<ObjectKind, GameObjectHandler> _playerRelatedObjects = [];
@@ -22,6 +21,8 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
     private CancellationTokenSource _debounceCts = new();
     private bool _haltCharaDataCreation;
     private bool _isZoning = false;
+    private int _latestRequestedGeneration = 0;
+    private int _lastPublishedGeneration = 0;
 
     public CacheCreationService(ILogger<CacheCreationService> logger, SyncMediator mediator, GameObjectHandlerFactory gameObjectHandlerFactory,
         PlayerDataFactory characterDataFactory, DalamudUtilService dalamudUtil) : base(logger, mediator)
@@ -175,6 +176,7 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
                 _cachesToCreate.Add(item);
             }
             _debouncedObjectCache.Clear();
+            Interlocked.Increment(ref _latestRequestedGeneration);
             _cacheCreateLock.Release();
         }, token);
     }
@@ -195,18 +197,17 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
         _creationCts.Cancel();
         _creationCts.Dispose();
         _creationCts = new();
-        _cacheCreateLock.Wait(_creationCts.Token);
+        var creationCts = _creationCts;
+        _cacheCreateLock.Wait(creationCts.Token);
         var objectKindsToCreate = _cachesToCreate.ToList();
-        foreach (var creationObj in objectKindsToCreate)
-        {
-            _currentlyCreating.Add(creationObj);
-        }
         _cachesToCreate.Clear();
         _cacheCreateLock.Release();
 
+        var capturedGeneration = _latestRequestedGeneration;
+
         _ = Task.Run(async () =>
         {
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_creationCts.Token, _runtimeCts.Token);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(creationCts.Token, _runtimeCts.Token);
 
             await Task.Delay(TimeSpan.FromSeconds(1), linkedCts.Token).ConfigureAwait(false);
 
@@ -215,7 +216,7 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
             try
             {
                 Dictionary<ObjectKind, CharacterDataFragment?> createdData = [];
-                foreach (var objectKind in _currentlyCreating)
+                foreach (var objectKind in objectKindsToCreate)
                 {
                     createdData[objectKind] = await _characterDataFactory.BuildCharacterData(_playerRelatedObjects[objectKind], linkedCts.Token).ConfigureAwait(false);
                 }
@@ -225,8 +226,15 @@ public sealed class CacheCreationService : DisposableMediatorSubscriberBase
                     _playerData.SetFragment(kvp.Key, kvp.Value);
                 }
 
-                Mediator.Publish(new CharacterDataCreatedMessage(_playerData.ToAPI()));
-                _currentlyCreating.Clear();
+                if (capturedGeneration < _lastPublishedGeneration)
+                {
+                    Logger.LogDebug("Skipping stale cache publish (gen {captured} < {last})", capturedGeneration, _lastPublishedGeneration);
+                }
+                else
+                {
+                    _lastPublishedGeneration = capturedGeneration;
+                    Mediator.Publish(new CharacterDataCreatedMessage(_playerData.ToAPI()));
+                }
             }
             catch (OperationCanceledException)
             {

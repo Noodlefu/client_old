@@ -5,6 +5,7 @@ using LaciSynchroni.PlayerData.Pairs;
 using LaciSynchroni.Services;
 using LaciSynchroni.Services.Mediator;
 using LaciSynchroni.Services.ServerConfiguration;
+using LaciSynchroni.SyncConfiguration;
 using LaciSynchroni.WebAPI.Files;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -16,7 +17,7 @@ public class PairHandlerFactory(ILoggerFactory loggerFactory, GameObjectHandlerF
     PluginWarningNotificationService pluginWarningNotificationManager, IHostApplicationLifetime hostApplicationLifetime,
     FileCacheManager fileCacheManager, SyncMediator syncMediator, PlayerPerformanceService playerPerformanceService,
     ServerConfigurationManager serverConfigManager, ConcurrentPairLockService concurrentPairLockService,
-    FileTransferOrchestrator transferOrchestrator)
+    FileTransferOrchestrator transferOrchestrator, SyncConfigService syncConfigService)
 {
     private readonly DalamudUtilService _dalamudUtilService = dalamudUtilService;
     private readonly FileCacheManager _fileCacheManager = fileCacheManager;
@@ -31,11 +32,13 @@ public class PairHandlerFactory(ILoggerFactory loggerFactory, GameObjectHandlerF
     private readonly ServerConfigurationManager _serverConfigManager = serverConfigManager;
     private readonly PluginWarningNotificationService _pluginWarningNotificationManager = pluginWarningNotificationManager;
     private readonly ConcurrentPairLockService _concurrentPairLockService = concurrentPairLockService;
+    private readonly SyncConfigService _syncConfigService = syncConfigService;
 
     public PairHandler Create(Pair pair)
     {
         return new PairHandler(_loggerFactory.CreateLogger<PairHandler>(), pair, _gameObjectHandlerFactory,
             _ipcManager, _fileDownloadManagerFactory.Create(), _pluginWarningNotificationManager, _dalamudUtilService, _hostApplicationLifetime,
-            _fileCacheManager, _syncMediator, _playerPerformanceService, _serverConfigManager, _concurrentPairLockService, _transferOrchestrator);
+            _fileCacheManager, _syncMediator, _playerPerformanceService, _serverConfigManager, _concurrentPairLockService, _transferOrchestrator,
+            _syncConfigService);
     }
 }
