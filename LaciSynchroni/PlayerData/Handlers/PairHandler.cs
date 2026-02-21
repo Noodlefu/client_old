@@ -37,16 +37,18 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
     private readonly ServerConfigurationManager _serverConfigManager;
     private readonly PluginWarningNotificationService _pluginWarningNotificationManager;
     private readonly ConcurrentPairLockService _concurrentPairLockService;
-    private CancellationTokenSource? _applicationCancellationTokenSource = new();
+    private sealed record ApplyRequest(Guid ApplicationBase, CharacterData CharacterData, bool ForceApplyCustomization, bool ForceApplyMods);
+
+    private readonly object _applyRequestGate = new();
+    private ApplyRequest? _pendingApplyRequest;
+    private Task _applyProcessorTask = Task.CompletedTask;
+    private CancellationTokenSource? _applyProcessorCts;
     private Guid _applicationId;
-    private Task? _applicationTask;
     private CharacterData? _cachedData = null;
     private GameObjectHandler? _charaHandler;
     private readonly Dictionary<ObjectKind, Guid?> _customizeIds = [];
     private CombatData? _dataReceivedInDowntime;
-    private CancellationTokenSource? _downloadCancellationTokenSource = new();
     private bool _forceApplyMods = false;
-    private bool _forceApplyCustomization = false;
     private bool _isVisible;
     private Guid _penumbraCollection;
     private bool _redrawOnNextApplication = false;
@@ -82,8 +84,11 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         Mediator.Subscribe<FrameworkUpdateMessage>(this, (_) => FrameworkUpdate());
         Mediator.Subscribe<ZoneSwitchStartMessage>(this, (_) =>
         {
-            _downloadCancellationTokenSource?.CancelDispose();
-            _applicationCancellationTokenSource = _applicationCancellationTokenSource?.CancelRecreate();
+            lock (_applyRequestGate)
+            {
+                _applyProcessorCts?.Cancel();
+                _pendingApplyRequest = null;
+            }
             _charaHandler?.Invalidate();
             // Release render lock on zone switch to prevent stale ownership blocking other servers
             _concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
@@ -118,8 +123,11 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         Mediator.Subscribe<CombatOrPerformanceStartMessage>(this, _ =>
         {
             _dataReceivedInDowntime = null;
-            _downloadCancellationTokenSource = _downloadCancellationTokenSource?.CancelRecreate();
-            _applicationCancellationTokenSource = _applicationCancellationTokenSource?.CancelRecreate();
+            lock (_applyRequestGate)
+            {
+                _applyProcessorCts?.Cancel();
+                _pendingApplyRequest = null;
+            }
         });
 
         LastAppliedDataBytes = -1;
@@ -186,9 +194,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         Logger.LogDebug("[BASE-{appbase}] Applying data for {player}, forceApplyCustomization: {forced}, forceApplyMods: {forceMods}", applicationBase, this, forceApplyCustomization, _forceApplyMods);
         Logger.LogDebug("[BASE-{appbase}] Hash for data is {newHash}, current cache hash is {oldHash}", applicationBase, characterData.DataHash.Value, _cachedData?.DataHash.Value ?? "NODATA");
 
-        _forceApplyCustomization |= forceApplyCustomization;
-
-        if (string.Equals(characterData.DataHash.Value, _cachedData?.DataHash.Value ?? string.Empty, StringComparison.Ordinal) && !_forceApplyCustomization)
+        if (string.Equals(characterData.DataHash.Value, _cachedData?.DataHash.Value ?? string.Empty, StringComparison.Ordinal) && !forceApplyCustomization)
         {
             // Even if the data hash matches, check if any required files are missing from cache
             // This handles the case where storage was cleared but character data is still cached in memory
@@ -207,50 +213,12 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             return;
         }
 
-        var renderLockServerIndex = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
-        if (renderLockServerIndex != Pair.ServerIndex && renderLockServerIndex > -1)
-        {
-            var currentPriority = _serverConfigManager.GetServerPriorityByIndex(Pair.ServerIndex);
-            var lockOwnerServer = _serverConfigManager.GetServerByIndex(renderLockServerIndex);
-            var lockOwnerPriority = lockOwnerServer.Priority ?? 0;
-            Logger.LogInformation(
-                "Cannot apply character data to {Player} from server {NewServerIndex} ({NewServerName}, priority {NewPriority}): server {ExistingServerIndex} ({ExistingServerName}, priority {ExistingPriority}) already syncs this target",
-                PlayerName,
-                Pair.ServerIndex,
-                _serverInfo.ServerName,
-                currentPriority,
-                renderLockServerIndex,
-                lockOwnerServer.ServerName,
-                lockOwnerPriority);
-            return;
-        }
-
         Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, GetType().Name, EventSeverity.Informational,
             "Applying Character Data")));
 
-        _forceApplyMods |= forceApplyCustomization;
-
-        var charaDataToUpdate = characterData.CheckUpdatedData(applicationBase, _cachedData?.DeepClone() ?? new(), Logger, this, _forceApplyCustomization, _forceApplyMods);
-
-        if (_charaHandler != null && _forceApplyMods)
-        {
-            _forceApplyMods = false;
-        }
-
-        if (_redrawOnNextApplication && charaDataToUpdate.TryGetValue(ObjectKind.Player, out var player))
-        {
-            player.Add(PlayerChanges.ForcedRedraw);
-            _redrawOnNextApplication = false;
-        }
-
-        if (charaDataToUpdate.TryGetValue(ObjectKind.Player, out var playerChanges))
-        {
-            _pluginWarningNotificationManager.NotifyForMissingPlugins(Pair.UserData, PlayerName!, playerChanges);
-        }
-
-        Logger.LogDebug("[BASE-{appbase}] Downloading and applying character for {name}", applicationBase, this);
-
-        DownloadAndApplyCharacter(applicationBase, characterData.DeepClone(), charaDataToUpdate);
+        var requestForceApplyMods = _forceApplyMods | forceApplyCustomization;
+        _forceApplyMods = false;
+        EnqueueApplyRequest(new ApplyRequest(applicationBase, characterData.DeepClone(), forceApplyCustomization, requestForceApplyMods));
     }
 
     public override string ToString()
@@ -280,10 +248,12 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         {
             Guid applicationId = Guid.NewGuid();
             _concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
-            _applicationCancellationTokenSource?.CancelDispose();
-            _applicationCancellationTokenSource = null;
-            _downloadCancellationTokenSource?.CancelDispose();
-            _downloadCancellationTokenSource = null;
+            lock (_applyRequestGate)
+            {
+                _applyProcessorCts?.CancelDispose();
+                _applyProcessorCts = null;
+                _pendingApplyRequest = null;
+            }
             _downloadManager.Dispose();
             _charaHandler?.Dispose();
             _charaHandler = null;
@@ -420,48 +390,103 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
-    private void DownloadAndApplyCharacter(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData)
+    private void EnqueueApplyRequest(ApplyRequest request)
     {
-        if (updatedData.Count == 0)
+        lock (_applyRequestGate)
+        {
+            _pendingApplyRequest = _pendingApplyRequest == null
+                ? request
+                : MergeApplyRequests(_pendingApplyRequest, request);
+
+            if (_applyProcessorTask.IsCompleted)
+            {
+                _applyProcessorCts?.Dispose();
+                _applyProcessorCts = new CancellationTokenSource();
+                _applyProcessorTask = ProcessApplyRequestsAsync(_applyProcessorCts.Token);
+            }
+        }
+    }
+
+    private static ApplyRequest MergeApplyRequests(ApplyRequest existing, ApplyRequest incoming) =>
+        incoming with
+        {
+            ForceApplyCustomization = existing.ForceApplyCustomization || incoming.ForceApplyCustomization,
+            ForceApplyMods = existing.ForceApplyMods || incoming.ForceApplyMods,
+        };
+
+    private async Task ProcessApplyRequestsAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            ApplyRequest? request;
+            lock (_applyRequestGate)
+            {
+                request = _pendingApplyRequest;
+                _pendingApplyRequest = null;
+            }
+
+            if (request == null) break;
+
+            await ExecuteApplyRequestAsync(request, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ExecuteApplyRequestAsync(ApplyRequest request, CancellationToken ct)
+    {
+        var applicationBase = request.ApplicationBase;
+        var charaData = request.CharacterData;
+
+        // Acquire render lock. Returns a live token if granted (cancelled automatically if a
+        // higher-priority server takes over or the lock is released), or a pre-cancelled token
+        // if this server is outright denied. The service logs the reason for denial.
+        var lockToken = _concurrentPairLockService.AcquireRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
+        if (lockToken.IsCancellationRequested)
+        {
+            Logger.LogDebug("[BASE-{appBase}] Render lock denied for {player}, skipping apply", applicationBase, this);
+            return;
+        }
+
+        // Link the processor CTS and the lock token so cancellation from either source
+        // (combat/zone switch via processor CTS, or priority takeover via lock token) aborts the work.
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, lockToken);
+        var token = linkedCts.Token;
+
+        var charaDataToUpdate = charaData.CheckUpdatedData(applicationBase, _cachedData?.DeepClone() ?? new(), Logger, this, request.ForceApplyCustomization, request.ForceApplyMods);
+
+        if (_redrawOnNextApplication && charaDataToUpdate.TryGetValue(ObjectKind.Player, out var player))
+        {
+            player.Add(PlayerChanges.ForcedRedraw);
+            _redrawOnNextApplication = false;
+        }
+
+        if (charaDataToUpdate.TryGetValue(ObjectKind.Player, out var playerChanges))
+        {
+            _pluginWarningNotificationManager.NotifyForMissingPlugins(Pair.UserData, PlayerName!, playerChanges);
+        }
+
+        if (charaDataToUpdate.Count == 0)
         {
             Logger.LogDebug("[BASE-{appBase}] Nothing to update for {obj}", applicationBase, this);
             return;
         }
 
-        var updateModdedPaths = updatedData.Values.Any(v => v.Any(p => p == PlayerChanges.ModFiles));
-        var updateManip = updatedData.Values.Any(v => v.Any(p => p == PlayerChanges.ModManip));
+        var updateModdedPaths = charaDataToUpdate.Values.Any(v => v.Any(p => p == PlayerChanges.ModFiles));
+        var updateManip = charaDataToUpdate.Values.Any(v => v.Any(p => p == PlayerChanges.ModManip));
 
-        _downloadCancellationTokenSource = _downloadCancellationTokenSource?.CancelRecreate() ?? new CancellationTokenSource();
-        var downloadToken = _downloadCancellationTokenSource.Token;
-
-        _ = DownloadAndApplyCharacterAsync(applicationBase, charaData, updatedData, updateModdedPaths, updateManip, downloadToken).ConfigureAwait(false);
-    }
-
-    private Task? _pairDownloadTask;
-
-    private async Task DownloadAndApplyCharacterAsync(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData,
-        bool updateModdedPaths, bool updateManip, CancellationToken downloadToken)
-    {
         Dictionary<(string GamePath, string? Hash), string> moddedPaths = [];
 
         if (updateModdedPaths)
         {
             int attempts = 0;
-            List<FileReplacementData> toDownloadReplacements = TryCalculateModdedDictionary(applicationBase, charaData, out moddedPaths, downloadToken);
+            List<FileReplacementData> toDownloadReplacements = TryCalculateModdedDictionary(applicationBase, charaData, out moddedPaths, token);
 
-            while (toDownloadReplacements.Count > 0 && attempts++ <= 10 && !downloadToken.IsCancellationRequested)
+            while (toDownloadReplacements.Count > 0 && attempts++ <= 10 && !token.IsCancellationRequested)
             {
-                if (_pairDownloadTask != null && !_pairDownloadTask.IsCompleted)
-                {
-                    Logger.LogDebug("[BASE-{appBase}] Finishing prior running download task for player {name}, {kind}", applicationBase, PlayerName, updatedData);
-                    await _pairDownloadTask.ConfigureAwait(false);
-                }
-
-                Logger.LogDebug("[BASE-{appBase}] Downloading missing files for player {name}, {kind}", applicationBase, PlayerName, updatedData);
+                Logger.LogDebug("[BASE-{appBase}] Downloading missing files for player {name}, {kind}", applicationBase, PlayerName, charaDataToUpdate);
 
                 Mediator.Publish(new EventMessage(new Event(PlayerName, Pair.UserData, GetType().Name, EventSeverity.Informational,
                     $"Starting download for {toDownloadReplacements.Count} files")));
-                var toDownloadFiles = await _downloadManager.InitiateDownloadList(Pair.ServerIndex, _charaHandler!, toDownloadReplacements, downloadToken).ConfigureAwait(false);
+                var toDownloadFiles = await _downloadManager.InitiateDownloadList(Pair.ServerIndex, _charaHandler!, toDownloadReplacements, token).ConfigureAwait(false);
 
                 if (!_playerPerformanceService.ComputeAndAutoPauseOnVRAMUsageThresholds(this, charaData, toDownloadFiles))
                 {
@@ -469,68 +494,33 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                     return;
                 }
 
-                _pairDownloadTask = Task.Run(async () => await _downloadManager.DownloadFiles(Pair.ServerIndex, _charaHandler!, toDownloadReplacements, downloadToken).ConfigureAwait(false), downloadToken);
+                await Task.Run(async () => await _downloadManager.DownloadFiles(Pair.ServerIndex, _charaHandler!, toDownloadReplacements, token).ConfigureAwait(false), token).ConfigureAwait(false);
 
-                await _pairDownloadTask.ConfigureAwait(false);
-
-                if (downloadToken.IsCancellationRequested)
+                if (token.IsCancellationRequested)
                 {
                     Logger.LogTrace("[BASE-{appBase}] Detected cancellation", applicationBase);
                     return;
                 }
 
-                toDownloadReplacements = TryCalculateModdedDictionary(applicationBase, charaData, out moddedPaths, downloadToken);
+                toDownloadReplacements = TryCalculateModdedDictionary(applicationBase, charaData, out moddedPaths, token);
 
                 if (toDownloadReplacements.TrueForAll(c => _transferOrchestrator.GetForbiddenTransfers().Exists(f => string.Equals(f.Hash, c.Hash, StringComparison.Ordinal))))
                 {
                     break;
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(2), downloadToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(2), token).ConfigureAwait(false);
             }
 
             if (!await _playerPerformanceService.CheckBothThresholds(this, charaData).ConfigureAwait(false))
                 return;
         }
 
-        downloadToken.ThrowIfCancellationRequested();
+        token.ThrowIfCancellationRequested();
 
-        // Wait for previous application task with timeout to prevent deadlocks
-        if (_applicationTask != null && !_applicationTask.IsCompleted)
-        {
-            Logger.LogDebug("[BASE-{appBase}] Waiting for current data application (Id: {id}) for player ({handler}) to finish", applicationBase, _applicationId, PlayerName);
-            try
-            {
-                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(downloadToken, timeoutCts.Token);
-                await _applicationTask.WaitAsync(combinedCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                if (downloadToken.IsCancellationRequested)
-                {
-                    return;
-                }
-                // Timeout occurred, log warning and proceed anyway to prevent deadlock
-                Logger.LogWarning("[BASE-{appBase}] Timeout waiting for previous application task (Id: {id}), proceeding anyway", applicationBase, _applicationId);
-            }
-        }
+        Logger.LogDebug("[BASE-{appBase}] Downloading and applying character for {name}", applicationBase, this);
 
-        if (downloadToken.IsCancellationRequested) return;
-
-        _applicationCancellationTokenSource = _applicationCancellationTokenSource.CancelRecreate() ?? new CancellationTokenSource();
-        // For now: Check if we still have priority after downloading. If not, end here, since a server with priority has taken over rendering that actor.
-        // Later: Pass cancellation token source to the lock, trigger cancel of everything when the lock gets taken away.
-        if (_concurrentPairLockService.HasRenderLock(PlayerNameHash, Pair.ServerIndex))
-        {
-            var token = _applicationCancellationTokenSource.Token;
-            _applicationTask = ApplyCharacterDataAsync(applicationBase, charaData, updatedData, updateModdedPaths, updateManip, moddedPaths, token);
-        }
-        else
-        {
-            _applicationTask = Task.CompletedTask;
-        }
-
+        await ApplyCharacterDataAsync(applicationBase, charaData, charaDataToUpdate, updateModdedPaths, updateManip, moddedPaths, token).ConfigureAwait(false);
     }
 
     private async Task ApplyCharacterDataAsync(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData, bool updateModdedPaths, bool updateManip,
@@ -582,7 +572,6 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
             }
 
             _cachedData = charaData;
-            _forceApplyCustomization = false;
 
             Logger.LogDebug("[{applicationId}] Application finished", _applicationId);
         }
@@ -650,8 +639,11 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         {
             IsVisible = false;
             _charaHandler.Invalidate();
-            _downloadCancellationTokenSource?.CancelDispose();
-            _downloadCancellationTokenSource = null;
+            lock (_applyRequestGate)
+            {
+                _applyProcessorCts?.Cancel();
+                _pendingApplyRequest = null;
+            }
             // Release render lock when the player is no longer visible
             _concurrentPairLockService.ReleaseRenderLock(PlayerNameHash, Pair.ServerIndex);
             Logger.LogTrace("{this} visibility changed, now: {visi}", this, IsVisible);
@@ -681,15 +673,15 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
         // Only the render-lock owner should assign the temp collection to avoid a non-owner overwriting
         // an already-populated collection with an empty one (which would render the target vanilla).
-        var lockOwner = _concurrentPairLockService.GetRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
+        var lockToken = _concurrentPairLockService.AcquireRenderLock(PlayerNameHash, Pair.ServerIndex, PlayerName);
         var lockGameObject = _charaHandler.GetGameObject();
-        if (lockOwner == Pair.ServerIndex && lockGameObject != null)
+        if (!lockToken.IsCancellationRequested && lockGameObject != null)
         {
             _ipcManager.Penumbra.AssignTemporaryCollectionAsync(Logger, _penumbraCollection, lockGameObject.ObjectIndex).GetAwaiter().GetResult();
         }
         else
         {
-            Logger.LogTrace("Skipping temp collection assignment for {this} - render lock is owned by server {owner}", this, lockOwner);
+            Logger.LogTrace("Skipping temp collection assignment for {this} - render lock is owned by another server", this);
         }
     }
 

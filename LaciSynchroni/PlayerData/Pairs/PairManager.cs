@@ -528,7 +528,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
 
             // Reapply Data - only for the server with render lock
             var renderLockPair = pairsForClosure.FirstOrDefault(p =>
-                _concurrentPairLockService.GetRenderLock(p.GetPlayerNameHash(), p.ServerIndex, p.PlayerName) == p.ServerIndex);
+                _concurrentPairLockService.GetCurrentLockHolder(p.GetPlayerNameHash()) == p.ServerIndex);
             if (renderLockPair != null)
             {
                 args.AddMenuItem(new MenuItem()
