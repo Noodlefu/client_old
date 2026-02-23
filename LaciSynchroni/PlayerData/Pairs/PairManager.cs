@@ -107,7 +107,8 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         if (_allClientPairs.TryGetValue(key, out var existingPair))
         {
             existingPair.UserPair.IndividualPairStatus = dto.IndividualPairStatus;
-            existingPair.ApplyLastReceivedData();
+            if (!existingPair.IsPaused)
+                existingPair.ApplyLastReceivedData();
         }
         else
         {
@@ -117,6 +118,7 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         }
 
         InvalidateDirectPairs();
+        InvalidateGroupPairs();
         InvalidatePairsWithGroups();
         RefreshUi();
     }
@@ -140,8 +142,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         _allClientPairs[key].UserPair.OtherPermissions = dto.OtherPermissions;
         if (addToLastAddedUser)
             LastAddedUser = _allClientPairs[key];
-        _allClientPairs[key].ApplyLastReceivedData();
+        if (!_allClientPairs[key].IsPaused)
+            _allClientPairs[key].ApplyLastReceivedData();
         InvalidateDirectPairs();
+        InvalidateGroupPairs();
         InvalidatePairsWithGroups();
         RefreshUi();
     }
@@ -189,6 +193,26 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
             .Select(p => p.Key),
     ];
 
+    public void ReconcileOnlinePairs(IEnumerable<OnlineUserIdentDto> serverOnlinePairs, int serverIndex)
+    {
+        var serverOnlineUids = serverOnlinePairs
+            .Select(e => e.User.UID)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var stale = _allClientPairs
+            .Where(p => p.Key.ServerIndex == serverIndex
+                     && p.Value.IsOnline
+                     && !serverOnlineUids.Contains(p.Key.UserData.UID))
+            .Select(p => p.Key.UserData)
+            .ToList();
+
+        foreach (var user in stale)
+        {
+            Logger.LogInformation("Reconciliation: marking {uid} offline — not in server online list", user.UID);
+            MarkPairOffline(user, serverIndex);
+        }
+    }
+
     public void MarkPairOffline(UserData user, int serverIndex)
     {
         var key = BuildKey(user, serverIndex);
@@ -209,7 +233,11 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     public void MarkPairOnline(OnlineUserIdentDto dto, int serverIndex, bool sendNotif = true)
     {
         var key = BuildKey(dto.User, serverIndex);
-        if (!_allClientPairs.TryGetValue(key, out var pair)) throw new InvalidOperationException("No user found for " + dto);
+        if (!_allClientPairs.TryGetValue(key, out var pair))
+        {
+            Logger.LogWarning("Received online notification for unknown pair {User} (server {ServerIndex}) — missing permissions or stale data", dto.User, serverIndex);
+            return;
+        }
 
         var message = new ServerBasedUserKey(dto.User, serverIndex);
         Mediator.Publish(new ClearProfileDataMessage(message));
@@ -249,7 +277,10 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
     {
         var key = BuildKey(dto.User, serverIndex);
         if (!_allClientPairs.TryGetValue(key, out var pair))
-            throw new InvalidOperationException("No user found for " + dto.User);
+        {
+            Logger.LogWarning("Received chara data for unknown pair {User} (server {ServerIndex})", dto.User, serverIndex);
+            return;
+        }
 
         Mediator.Publish(new EventMessage(new Event(pair.UserData, GetType().Name, EventSeverity.Informational,
             "Received Character Data")));
@@ -333,7 +364,8 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         var key = BuildKey(dto.User, serverIndex);
         if (!_allClientPairs.TryGetValue(key, out var pair))
         {
-            throw new InvalidOperationException("No such pair for " + dto);
+            Logger.LogWarning("Received permission update for unknown pair {User} (server {ServerIndex})", dto.User, serverIndex);
+            return;
         }
 
         if (pair.UserPair == null)
@@ -367,7 +399,8 @@ public sealed class PairManager : DisposableMediatorSubscriberBase
         var key = BuildKey(dto.User, serverIndex);
         if (!_allClientPairs.TryGetValue(key, out var pair))
         {
-            throw new InvalidOperationException("No such pair for " + dto);
+            Logger.LogWarning("Received self-permission update for unknown pair {User} (server {ServerIndex})", dto.User, serverIndex);
+            return;
         }
 
         if (pair.UserPair.OwnPermissions.IsPaused() != dto.Permissions.IsPaused())

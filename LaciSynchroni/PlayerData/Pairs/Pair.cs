@@ -27,7 +27,7 @@ public class Pair(ILogger<Pair> logger, UserFullPairDto userPair, PairHandlerFac
     private OnlineUserIdentDto? _onlineUserIdentDto = null;
     private ushort? _visibleHomeWorldId;
 
-    public bool HasCachedPlayer => CachedPlayer != null && !string.IsNullOrEmpty(CachedPlayer.PlayerName) && _onlineUserIdentDto != null;
+    public bool HasCachedPlayer { get { var c = CachedPlayer; return c != null && !string.IsNullOrEmpty(c.PlayerName) && _onlineUserIdentDto != null; } }
     public IndividualPairStatus IndividualPairStatus => UserPair.IndividualPairStatus;
     public bool IsDirectlyPaired => IndividualPairStatus != IndividualPairStatus.None;
     public bool IsOneSidedPair => IndividualPairStatus == IndividualPairStatus.OneSided;

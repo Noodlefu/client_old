@@ -58,6 +58,8 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
     public string AuthFailureMessage { get; private set; } = string.Empty;
     private string? _lastUsedToken;
     private CensusUpdateMessage? _lastCensus;
+    private int _healthCheckCount = 0;
+    private const int OnlineReconcileInterval = 10; // every 10 × 30 s = 5 minutes
 
     public ConnectionDto? ConnectionDto { get; private set; }
     public SystemInfoDto? SystemInfoDto { get; private set; }
@@ -414,6 +416,9 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
             }
 
             _serverState = ServerState.Connected;
+            // Clear stale pair state before reloading — pairs that went offline during the
+            // disconnection window will not have received their offline notifications.
+            _pairManager.ClearPairs(ServerIndex);
             await LoadIninitialPairsAsync().ConfigureAwait(false);
             await LoadOnlinePairsAsync().ConfigureAwait(false);
             Mediator.Publish(new ConnectedMessage(ConnectionDto, ServerIndex));
@@ -520,6 +525,12 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
                 _ = CreateConnectionsAsync();
                 break;
             }
+
+            _healthCheckCount++;
+            if (_healthCheckCount % OnlineReconcileInterval == 0)
+            {
+                await ReconcileOnlinePairsAsync(ct).ConfigureAwait(false);
+            }
         }
     }
 
@@ -564,6 +575,27 @@ public partial class SyncHubClient : DisposableMediatorSubscriberBase, IServerHu
         {
             Logger.LogDebug("Individual Pair: {userPair}", userPair);
             _pairManager.AddUserPair(userPair, ServerIndex);
+        }
+    }
+
+    private async Task ReconcileOnlinePairsAsync(CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested || _connection == null) return;
+        try
+        {
+            Logger.LogDebug("Reconciling online pair state with server");
+            CensusDataDto? dto = null;
+            if (_serverConfigurationManager.SendCensusData && _lastCensus != null)
+            {
+                var world = await _dalamudUtil.GetWorldIdAsync().ConfigureAwait(false);
+                dto = new((ushort)world, _lastCensus.RaceId, _lastCensus.TribeId, _lastCensus.Gender);
+            }
+            var serverOnlinePairs = await UserGetOnlinePairs(dto).ConfigureAwait(false);
+            _pairManager.ReconcileOnlinePairs(serverOnlinePairs, ServerIndex);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to reconcile online pairs");
         }
     }
 

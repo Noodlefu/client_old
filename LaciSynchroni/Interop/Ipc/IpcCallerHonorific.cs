@@ -83,7 +83,7 @@ public sealed class IpcCallerHonorific : IpcCallerBase
         return string.IsNullOrEmpty(title) ? string.Empty : Convert.ToBase64String(Encoding.UTF8.GetBytes(title));
     }
 
-    public async Task SetTitleAsync(IntPtr character, string honorificDataB64)
+    public async Task SetTitleAsync(IntPtr character, string honorificDataB64, bool force = false)
     {
         Logger.LogTrace("Applying Honorific data to {chara}", character.ToString("X"));
         await SafeInvokeAsync(async () =>
@@ -93,7 +93,7 @@ public sealed class IpcCallerHonorific : IpcCallerBase
                 var gameObj = DalamudUtil.CreateGameObject(character);
                 if (gameObj is IPlayerCharacter pc)
                 {
-                    if (_appliedTitleByIndex.TryGetValue(pc.ObjectIndex, out var cached) &&
+                    if (!force && _appliedTitleByIndex.TryGetValue(pc.ObjectIndex, out var cached) &&
                         string.Equals(cached, honorificDataB64, StringComparison.Ordinal))
                     {
                         Logger.LogTrace("Honorific unchanged for {addr}, skipping IPC", pc.Address.ToString("X"));
@@ -117,6 +117,7 @@ public sealed class IpcCallerHonorific : IpcCallerBase
 
     private void OnHonorificDisposing()
     {
+        _appliedTitleByIndex.Clear();
         Mediator.Publish(new HonorificMessage(string.Empty));
     }
 

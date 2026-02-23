@@ -310,7 +310,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
         }
     }
 
-    private async Task ApplyCustomizationDataAsync(Guid applicationId, KeyValuePair<ObjectKind, HashSet<PlayerChanges>> changes, CharacterData charaData, CancellationToken token)
+    private async Task ApplyCustomizationDataAsync(Guid applicationId, KeyValuePair<ObjectKind, HashSet<PlayerChanges>> changes, CharacterData charaData, bool forceApplyCustomization, CancellationToken token)
     {
         if (PlayerCharacter == nint.Zero) return;
         var ptr = PlayerCharacter;
@@ -356,7 +356,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
                         break;
 
                     case PlayerChanges.Honorific:
-                        await _ipcManager.Honorific.SetTitleAsync(handler.Address, charaData.HonorificData).ConfigureAwait(false);
+                        await _ipcManager.Honorific.SetTitleAsync(handler.Address, charaData.HonorificData, forceApplyCustomization).ConfigureAwait(false);
                         break;
 
                     case PlayerChanges.Glamourer:
@@ -520,11 +520,11 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
         Logger.LogDebug("[BASE-{appBase}] Downloading and applying character for {name}", applicationBase, this);
 
-        await ApplyCharacterDataAsync(applicationBase, charaData, charaDataToUpdate, updateModdedPaths, updateManip, moddedPaths, token).ConfigureAwait(false);
+        await ApplyCharacterDataAsync(applicationBase, charaData, charaDataToUpdate, updateModdedPaths, updateManip, moddedPaths, request.ForceApplyCustomization, token).ConfigureAwait(false);
     }
 
     private async Task ApplyCharacterDataAsync(Guid applicationBase, CharacterData charaData, Dictionary<ObjectKind, HashSet<PlayerChanges>> updatedData, bool updateModdedPaths, bool updateManip,
-        Dictionary<(string GamePath, string? Hash), string> moddedPaths, CancellationToken token)
+        Dictionary<(string GamePath, string? Hash), string> moddedPaths, bool forceApplyCustomization, CancellationToken token)
     {
         try
         {
@@ -567,7 +567,7 @@ public sealed class PairHandler : DisposableMediatorSubscriberBase
 
             foreach (var kind in updatedData)
             {
-                await ApplyCustomizationDataAsync(_applicationId, kind, charaData, token).ConfigureAwait(false);
+                await ApplyCustomizationDataAsync(_applicationId, kind, charaData, forceApplyCustomization, token).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
             }
 
